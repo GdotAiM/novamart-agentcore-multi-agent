@@ -1,0 +1,276 @@
+diff -ruN -x __pycache__ -x .pytest_cache proj/infrastructure/seed_data.py proj-fixed/infrastructure/seed_data.py
+--- proj/infrastructure/seed_data.py	2026-09-23 10:47:10.000000000 +0200
++++ proj-fixed/infrastructure/seed_data.py	2026-09-26 16:00:03.996019059 +0200
+@@ -20,6 +20,12 @@
+ import sys
+ from datetime import datetime, timedelta
+ 
++try:                                   # honour .env like config.py does
++    from dotenv import load_dotenv
++    load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
++except ImportError:
++    pass
++
+ AWS_REGION   = os.environ.get('AWS_REGION', 'us-east-1')
+ PROJECT_NAME = os.environ.get('PROJECT_NAME', 'udacity-agentcore')
+ 
+diff -ruN -x __pycache__ -x .pytest_cache proj/infrastructure/starter_stack.yaml proj-fixed/infrastructure/starter_stack.yaml
+--- proj/infrastructure/starter_stack.yaml	2026-09-23 10:47:10.000000000 +0200
++++ proj-fixed/infrastructure/starter_stack.yaml	2026-09-26 16:00:03.996019059 +0200
+@@ -114,6 +114,7 @@
+       MetadataConfiguration:
+         NonFilterableMetadataKeys:
+           - AMAZON_BEDROCK_TEXT
++          - AMAZON_BEDROCK_METADATA
+ 
+   ShippingVectorIndex:
+     Type: AWS::S3Vectors::Index
+@@ -126,6 +127,7 @@
+       MetadataConfiguration:
+         NonFilterableMetadataKeys:
+           - AMAZON_BEDROCK_TEXT
++          - AMAZON_BEDROCK_METADATA
+ 
+   WarrantyVectorIndex:
+     Type: AWS::S3Vectors::Index
+@@ -138,6 +140,7 @@
+       MetadataConfiguration:
+         NonFilterableMetadataKeys:
+           - AMAZON_BEDROCK_TEXT
++          - AMAZON_BEDROCK_METADATA
+ 
+   # ─────────────────────────────────────────────
+   # IAM - Role for AgentCore
+diff -ruN -x __pycache__ -x .pytest_cache proj/src/agent_orchestrator.py proj-fixed/src/agent_orchestrator.py
+--- proj/src/agent_orchestrator.py	2026-09-26 15:39:46.000000000 +0200
++++ proj-fixed/src/agent_orchestrator.py	2026-09-26 16:00:03.996019059 +0200
+@@ -224,6 +224,7 @@
+     only retrieves data for the OrchestratorAgent to share with downstream agents.
+     """
+     model = BedrockModel(
++        region_name=config.AWS_REGION,
+         model_id=config.WORKER_MODEL_ID,
+         temperature=0.1,
+     )
+@@ -334,6 +335,7 @@
+     interprets the structured result and decides whether to call initiate_refund.
+     """
+     model = BedrockModel(
++        region_name=config.AWS_REGION,
+         model_id=config.WORKER_MODEL_ID,
+         temperature=0.1,
+     )
+@@ -363,6 +365,14 @@
+         tier = (customer.get("tier") or "Standard").strip()
+         window_days = 60 if tier.lower() == "premium" else 30
+ 
++        status = str(order.get("status") or "").strip().lower()
++        if status != "delivered":
++            reason = ("A return has already been initiated for this order"
++                      if status == "return initiated" else
++                      f"Order status is '{order.get('status')}' - only delivered orders can be returned")
++            return {"eligible": False, "days_since_order": None, "window_days": window_days,
++                    "tier": tier, "reason": reason}
++
+         order_date_str = order.get("order_date") or order.get("orderDate") or ""
+         try:
+             order_date = datetime.strptime(str(order_date_str)[:10], "%Y-%m-%d").date()
+@@ -489,7 +499,7 @@
+             "order": _clean(order) if order else {},
+             "customer": _clean(customer) if customer else {},
+             "eligibility": eligibility,
+-            "version": state.get("version", 0),
++            "version": int(state.get("version", 0)),
+         }
+ 
+     @tool
+@@ -583,6 +593,7 @@
+     the combined results into a complete, grounded policy answer.
+     """
+     retriever_model = BedrockModel(
++        region_name=config.AWS_REGION,
+         model_id=config.WORKER_MODEL_ID,
+         temperature=0.0,
+     )
+@@ -658,9 +669,19 @@
+             "Warranty": config.WARRANTY_KB_ID,
+         })
+ 
++        kb_ids = {
++            "Returns":  config.RETURNS_KB_ID,
++            "Shipping": config.SHIPPING_KB_ID,
++            "Warranty": config.WARRANTY_KB_ID,
++        }
++
+         def _run_retriever(domain: str, agent, query: str) -> tuple:
+             """Run one retriever sub-agent and return (domain, result_text)."""
++            if not kb_ids[domain]:
++                return domain, (f"[{domain} Knowledge Base not configured - set "
++                                f"{domain.upper()}_KB_ID in .env]")
+             try:
++                agent.messages.clear()          # stateless per query
+                 result = agent(query)
+                 text = str(result)
+             except Exception as exc:
+@@ -687,6 +708,7 @@
+         return "\n\n".join(sections)
+ 
+     coordinator_model = BedrockModel(
++        region_name=config.AWS_REGION,
+         model_id=config.WORKER_MODEL_ID,
+         temperature=0.2,
+     )
+@@ -700,11 +722,14 @@
+         "Be concise and customer-friendly."
+     )
+ 
+-    return Agent(
++    policy_agent = Agent(
+         model=coordinator_model,
+         system_prompt=system_prompt,
+         tools=[search_all_policies],
+     )
++    # Exposed so build_agent_graph() can attach the guardrail to the sub-agents too.
++    policy_agent.retriever_agents = [returns_retriever, shipping_retriever, warranty_retriever]
++    return policy_agent
+ 
+ 
+ # ───────────────────────────────────────────────────────
+@@ -719,6 +744,7 @@
+     and composing a coherent, empathetic response.
+     """
+     model = BedrockModel(
++        region_name=config.AWS_REGION,
+         model_id=config.WORKER_MODEL_ID,
+         temperature=0.3,
+     )
+@@ -755,7 +781,7 @@
+             "inventory_agent": state.get("inventory_agent"),
+             "policy_agent": state.get("policy_agent"),
+             "refund_agent": state.get("refund_agent"),
+-            "version": state.get("version"),
++            "version": int(state.get("version", 0)),
+         }
+ 
+     return Agent(
+@@ -779,6 +805,7 @@
+     Build the Orchestrator Agent that routes requests and manages WorkflowState.
+     """
+     model = BedrockModel(
++        region_name=config.AWS_REGION,
+         model_id=config.ORCHESTRATOR_MODEL_ID,
+         temperature=0.0,
+     )
+@@ -841,6 +868,7 @@
+         old_version = int(state.get("version", 0))
+ 
+         prompt = f"[Session ID: {session_id}] [Customer ID: {customer_id}] {request}"
++        inventory_agent.messages.clear()
+         result = inventory_agent(prompt)
+         text = str(result)
+ 
+@@ -865,6 +893,7 @@
+         state = _read_workflow_state(session_id) or {}
+         old_version = int(state.get("version", 0))
+ 
++        policy_agent.messages.clear()
+         result = policy_agent(request)
+         text = str(result)
+ 
+@@ -891,6 +920,7 @@
+         old_version = int(state.get("version", 0))
+ 
+         prompt = f"[Session ID: {session_id}] [Customer ID: {customer_id}] {request}"
++        refund_agent.messages.clear()
+         result = refund_agent(prompt)
+         text = str(result)
+ 
+@@ -922,6 +952,7 @@
+             f"Original customer request: {original_request}\n"
+             "Compose the final customer-facing reply using the full workflow context."
+         )
++        communication_agent.messages.clear()
+         result = communication_agent(prompt)
+         text = str(result)
+ 
+@@ -980,7 +1011,8 @@
+     )
+     _ok('Orchestrator')
+     _apply_guardrail([inventory_agent, refund_agent, policy_agent,
+-                      communication_agent, orchestrator])
++                      communication_agent, orchestrator,
++                      *getattr(policy_agent, 'retriever_agents', [])])
+     if verbose and config.GUARDRAIL_ID:
+         print(f"  {_C.GRY}          Guardrail {config.GUARDRAIL_ID} "
+               f"(v{config.GUARDRAIL_VERSION}) attached to all agents{_C.RESET}")
+@@ -1036,9 +1068,15 @@
+             guardrail_id = g['id']
+             versions = bedrock_client.list_guardrails(guardrailIdentifier=guardrail_id)
+             guardrail_version = 'DRAFT'
+-            for v in versions.get('guardrails', []):
+-                if v.get('version', 'DRAFT') != 'DRAFT':
+-                    guardrail_version = v['version']
++            numbered = [int(v['version']) for v in versions.get('guardrails', [])
++                         if str(v.get('version', 'DRAFT')).isdigit()]
++            if numbered:
++                guardrail_version = str(max(numbered))
++            else:
++                guardrail_version = bedrock_client.create_guardrail_version(
++                    guardrailIdentifier=guardrail_id,
++                    description="Production version for NovaMart multi-agent system",
++                )['version']
+             print(f"Guardrail already exists: {guardrail_id} (version: {guardrail_version})")
+             return guardrail_id, guardrail_version
+ 
+@@ -1644,6 +1682,7 @@
+         print(f"Session: {session_id} | Customer: {customer_id}")
+         print(f"Query: {query}")
+         prompt = f"[Session ID: {session_id}] [Customer ID: {customer_id}] {query}"
++        orchestrator.messages.clear()
+         with tracer.trace_request(session_id, customer_id, query):
+             response = orchestrator(prompt)
+         print(f"Response: {response}")
+@@ -1785,6 +1824,7 @@
+ 
+     app   = BedrockAgentCoreApp()
+     lock  = threading.Lock()
++    invoke_lock = threading.Lock()
+     graph = {}
+ 
+     def _orchestrator():
+@@ -1805,8 +1845,11 @@
+             return {'error': "payload must include 'prompt'"}
+ 
+         enriched = f"[Session ID: {session_id}] [Customer ID: {customer_id}] {prompt}"
+-        with tracer.trace_request(session_id, customer_id, prompt):
+-            response = _orchestrator()(enriched)
++        orchestrator = _orchestrator()
++        with invoke_lock:            # Strands agents reject concurrent invocations
++            orchestrator.messages.clear()
++            with tracer.trace_request(session_id, customer_id, prompt):
++                response = orchestrator(enriched)
+ 
+         state = _read_workflow_state(session_id) or {}
+         text  = _strip_xml_tags(state.get('communication_agent', '') or str(response))
+diff -ruN -x __pycache__ -x .pytest_cache proj/src/demo.py proj-fixed/src/demo.py
+--- proj/src/demo.py	2026-09-23 10:47:10.000000000 +0200
++++ proj-fixed/src/demo.py	2026-09-26 16:00:03.996019059 +0200
+@@ -47,6 +47,8 @@
+ #   "Tool #N: name"  ->  [TOOL CALL]  name
+ #   all other text   ->  | <text>      (agent reasoning)
+ 
++import time
++t0 = time.time()
+ trace.new_turn()
+ sys.stdout = _trace_writer
+ try:
+@@ -57,8 +59,7 @@
+ 
+ # ── Print workflow summary and final response ─────────────────────────────────
+ 
+-import time
+-trace.summary(session_id, elapsed=0)
++trace.summary(session_id, elapsed=time.time() - t0)
+ 
+ state       = _read_workflow_state(session_id) or {}
+ comm_result = state.get('communication_agent', '')
