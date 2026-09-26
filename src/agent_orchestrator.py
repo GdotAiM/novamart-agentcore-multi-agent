@@ -207,6 +207,273 @@ def _update_workflow_state(session_id: str, updates: dict,
     raise RuntimeError("WorkflowState update: unexpected exit from retry loop")
 
 
+
+# ═══════════════════════════════════════════════════════
+#  CONVERSATION TURNS, AGENTCORE MEMORY AND REPLY HYGIENE
+#
+#  A "session" can now span several turns (chat, or `invoke --session-id`).
+#  Each turn:
+#    1. _prepare_turn()  loads context from AgentCore Memory (earlier turns of
+#       this session + summaries of the customer's previous sessions), resets the
+#       per-turn agent columns in WorkflowState and stores the context there so
+#       every worker sees the same, deterministic view of the conversation.
+#    2. the orchestrator runs as before.
+#    3. _finish_turn()   writes the USER / ASSISTANT turn to AgentCore Memory.
+#  Memory is optional: without AGENTCORE_MEMORY_ID (local runs, tests) every
+#  memory call is skipped and the system behaves exactly as a single-turn bot.
+# ═══════════════════════════════════════════════════════
+
+_AGENT_COLUMNS = ('inventory_agent', 'policy_agent', 'refund_agent', 'communication_agent')
+_MEMORY_MAX_TURNS = 10          # recent events of this session loaded per turn
+_MEMORY_MAX_CHARS = 4000        # cap on the context injected into prompts
+
+
+def _memory_id() -> Optional[str]:
+    """AgentCore Memory ID (set by deploy in .env and the runtime env), or None."""
+    if os.environ.get('AGENT_MEMORY_ENABLED', 'true').strip().lower() in ('0', 'false', 'no'):
+        return None
+    return (os.environ.get('AGENTCORE_MEMORY_ID') or '').strip() or None
+
+
+def _load_memory_context(session_id: str, customer_id: str) -> str:
+    """
+    Build a short plain-text context block from AgentCore Memory:
+      - recent conversational events of THIS session (short-term memory)
+      - SESSION_SUMMARY records of the customer's earlier sessions (long-term)
+    Returns '' when memory is not configured or anything fails (never raises).
+    """
+    memory_id = _memory_id()
+    if not memory_id or not customer_id:
+        return ''
+    lines = []
+    try:
+        resp = agentcore_client.list_events(
+            memoryId=memory_id, actorId=customer_id, sessionId=session_id,
+            includePayloads=True, maxResults=_MEMORY_MAX_TURNS * 2)
+        events = sorted(resp.get('events', []), key=lambda e: str(e.get('eventTimestamp', '')))
+        for ev in events[-_MEMORY_MAX_TURNS:]:
+            for item in ev.get('payload', []):
+                conv = item.get('conversational') or {}
+                text = (conv.get('content') or {}).get('text', '').strip()
+                if text:
+                    who = 'Customer' if conv.get('role') == 'USER' else 'NovaMart'
+                    lines.append(f"{who}: {text[:1200]}")
+    except Exception as e:                       # memory must never break a request
+        logger.warning(f"AgentCore Memory list_events failed: {e}")
+    summaries = []
+    try:
+        resp = agentcore_client.list_memory_records(
+            memoryId=memory_id, namespace=f"/summaries/{customer_id}/", maxResults=10)
+        for rec in resp.get('memoryRecordSummaries', []):
+            if any(ns.rstrip('/').endswith('/' + session_id) for ns in rec.get('namespaces', [])):
+                continue                          # this session is already covered by its events
+            text = ((rec.get('content') or {}).get('text') or '').strip()
+            if text:
+                summaries.append(text[:800])
+    except Exception as e:
+        logger.warning(f"AgentCore Memory list_memory_records failed: {e}")
+    parts = []
+    if summaries:
+        parts.append("Summaries of this customer's earlier sessions:\n- " + "\n- ".join(summaries[:3]))
+    if lines:
+        parts.append("Earlier turns in this conversation:\n" + "\n".join(lines))
+    return "\n\n".join(parts)[-_MEMORY_MAX_CHARS:]
+
+
+def _save_memory_turn(session_id: str, customer_id: str, user_text: str, assistant_text: str) -> bool:
+    """Append one USER + ASSISTANT turn to AgentCore Memory. Returns True if written."""
+    memory_id = _memory_id()
+    if not memory_id or not customer_id:
+        return False
+    from datetime import datetime, timezone
+    payload = [{'conversational': {'role': 'USER', 'content': {'text': (user_text or '')[:8000]}}}]
+    if assistant_text:
+        payload.append({'conversational': {'role': 'ASSISTANT',
+                                           'content': {'text': assistant_text[:8000]}}})
+    try:
+        agentcore_client.create_event(
+            memoryId=memory_id, actorId=customer_id, sessionId=session_id,
+            eventTimestamp=datetime.now(timezone.utc), payload=payload,
+            clientToken=str(uuid.uuid4()))
+        return True
+    except Exception as e:
+        logger.warning(f"AgentCore Memory create_event failed: {e}")
+        return False
+
+
+def _begin_turn(session_id: str, customer_id: str, request: str, memory_context: str = '') -> dict:
+    """
+    Start a new turn in WorkflowState: create the row for a new session, or for
+    an existing session clear the previous turn's agent columns (so stale
+    findings cannot leak into this answer) and bump the version.
+    """
+    table = dynamodb.Table(config.WORKFLOW_STATE_TABLE)
+    try:
+        state = _create_workflow_state(session_id, customer_id)
+    except ClientError as e:
+        if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+            raise
+        state = None
+    now = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    values = {':req': request or '', ':ctx': memory_context or '', ':now': now,
+              ':one': 1, ':zero': 0, ':ttl': int(time.time()) + 24 * 3600}
+    expr = ('SET current_request = :req, memory_context = :ctx, turn_started_at = :now, '
+            'turn = if_not_exists(turn, :zero) + :one, #v = if_not_exists(#v, :zero) + :one, #t = :ttl')
+    if state is None:                                           # existing session → new turn
+        expr += ' REMOVE ' + ', '.join(_AGENT_COLUMNS)
+    table.update_item(Key={'session_id': session_id}, UpdateExpression=expr,
+                      ExpressionAttributeNames={'#v': 'version', '#t': 'ttl'},
+                      ExpressionAttributeValues=values)
+    return _read_workflow_state(session_id) or {}
+
+
+def _prepare_turn(session_id: str, customer_id: str, request: str) -> str:
+    """Load memory, start the WorkflowState turn, return the orchestrator prompt."""
+    context = _load_memory_context(session_id, customer_id)
+    try:
+        _begin_turn(session_id, customer_id, request, context)
+    except Exception as e:
+        logger.warning(f"Could not start WorkflowState turn for {session_id}: {e}")
+    prompt = f"[Session ID: {session_id}] [Customer ID: {customer_id}] {request}"
+    if context:
+        prompt += ("\n\n[Conversation so far - use it to interpret follow-up messages; "
+                   "do not answer from it directly]\n" + context)
+    return prompt
+
+
+def _finish_turn(session_id: str, customer_id: str, request: str, response_text: str) -> bool:
+    """Persist the finished turn to AgentCore Memory (no-op without memory)."""
+    return _save_memory_turn(session_id, customer_id, request, response_text)
+
+
+def _with_context(session_id: str, request: str) -> str:
+    """Prefix a worker prompt with the memory context stored for this turn (if any)."""
+    state = _read_workflow_state(session_id) or {}
+    ctx = (state.get('memory_context') or '').strip()
+    if not ctx:
+        return request
+    return (f"Context from earlier in this conversation (for reference only):\n{ctx}\n\n"
+            f"Current customer message: {request}")
+
+
+# Phrases that only appear in an agent's narration about its own work, never in
+# a customer-facing reply. Used to strip "reasoning" preambles/postscripts.
+import re as _re_mod
+_META_RE = _re_mod.compile(
+    r"(workflow|let me (now )?(compose|draft|write|provide|put together|prepare)|"
+    r"i('ll| will) (now )?(compose|draft|write|provide|prepare)|"
+    r"final (customer[- ]facing )?(response|reply|message)|"
+    r"this is a (straightforward |simple )?(pricing|math|calculation)|"
+    r"no other agents|specialized agents|the customer('s)? (request|question))",
+    _re_mod.I)
+_GREETING_RE = _re_mod.compile(r"^\W*(dear|hi|hello|hey|thank|good (morning|afternoon|evening))", _re_mod.I)
+
+
+def _final_customer_text(text: str) -> str:
+    """
+    Return only the customer-facing reply: drop XML tags, narration before or
+    after '---' separators, a leading 'Subject:' line and meta paragraphs.
+    """
+    t = _strip_xml_tags(text or '').strip()
+    if not t:
+        return t
+    parts = [p.strip() for p in _re_mod.split(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$", t, flags=_re_mod.M)]
+    parts = [p for p in parts if p]
+    if len(parts) > 1:
+        kept = [p for p in parts if not (_META_RE.search(p) and len(p) < 600 and not _GREETING_RE.search(p))]
+        t = "\n\n".join(kept or parts[-1:])
+    paras = t.split("\n\n")
+    while len(paras) > 1 and _META_RE.search(paras[0]) and not _GREETING_RE.search(paras[0]) \
+            and len(paras[0]) < 600:
+        paras.pop(0)
+    while len(paras) > 1 and _META_RE.search(paras[-1]) and len(paras[-1]) < 300:
+        paras.pop()
+    t = "\n\n".join(paras).strip()
+    t = _re_mod.sub(r"^\**\s*Subject:[^\n]*\n+", "", t, flags=_re_mod.I).strip()
+    return t
+
+
+_QUESTION_ONLY_RE = _re_mod.compile(
+    r"\b(policy|policies|how (do|does|long|many|much)|what (is|are)|what's|can i|could i|"
+    r"am i (able|eligible)|is it possible|would i be able|eligible\?)", _re_mod.I)
+_RETURN_INTENT_RE = _re_mod.compile(
+    r"\b(i('d| would)? (like|want|wish|need) to (return|send back|get a refund)|"
+    r"(please )?(start|initiate|process|open|begin) (a |the |my )?(return|refund)|"
+    r"i('m| am) returning|return (it|this|them|my|the order|order)|refund (me|my|it|this))", _re_mod.I)
+
+
+def _explicit_return_intent(request: str) -> bool:
+    """True for an explicit instruction to return an order (not a policy question)."""
+    q = request or ''
+    return bool(_RETURN_INTENT_RE.search(q)) and not _QUESTION_ONLY_RE.search(q)
+
+
+def _parse_date(value):
+    from datetime import datetime
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _compute_eligibility(order: dict, customer: dict, today=None) -> dict:
+    """
+    Deterministic return eligibility.
+    Window: Standard = 30 days, Premium = 60 days, counted from the DELIVERY date
+    (policy: "within 30 days of delivery"). Date used, in order of preference:
+      delivered_date  →  estimated_delivery (if already in the past)  →  order_date.
+    Only orders with status 'delivered' can be returned.
+    """
+    from datetime import date
+    today = today or date.today()
+    tier = (customer.get("tier") or "Standard").strip()
+    window_days = 60 if tier.lower() == "premium" else 30
+    base = {"window_days": window_days, "tier": tier,
+            "days_since_delivery": None, "days_since_order": None, "date_basis": None}
+
+    status = str(order.get("status") or "").strip().lower()
+    if status != "delivered":
+        reason = ("A return has already been initiated for this order"
+                  if status == "return initiated" else
+                  f"Order status is '{order.get('status')}' - only delivered orders can be returned")
+        return {**base, "eligible": False, "reason": reason}
+
+    order_date = _parse_date(order.get("order_date") or order.get("orderDate"))
+    if order_date:
+        base["days_since_order"] = (today - order_date).days
+    delivered = _parse_date(order.get("delivered_date") or order.get("delivery_date"))
+    basis = "delivered_date"
+    if not delivered:
+        est = _parse_date(order.get("estimated_delivery"))
+        if est and est <= today:
+            delivered, basis = est, "estimated_delivery"
+        else:
+            delivered, basis = order_date, "order_date"
+    if not delivered:
+        return {**base, "eligible": False,
+                "reason": f"Cannot determine a delivery or order date for {order.get('order_id', 'this order')}"}
+
+    days = (today - delivered).days
+    base.update(days_since_delivery=days, date_basis=basis)
+    label = "delivery" if basis != "order_date" else "order (no delivery date recorded)"
+    if days < 0:
+        return {**base, "eligible": False, "reason": "Delivery date is in the future"}
+    if days <= window_days:
+        return {**base, "eligible": True,
+                "reason": f"Within {tier} {window_days}-day return window ({days} days since {label})"}
+    return {**base, "eligible": False,
+            "reason": f"Outside {tier} {window_days}-day return window ({days} days since {label})"}
+
+
+def _runtime_session_id(session_id: str) -> str:
+    """
+    Stable AgentCore runtimeSessionId (>= 33 chars) for a project session id, so
+    repeated invokes with the same session id reach the same runtime session.
+    """
+    import hashlib
+    return f"{session_id}-{hashlib.sha256(session_id.encode()).hexdigest()[:32]}"
+
+
 # ═══════════════════════════════════════════════════════
 #  TASK 2 - MULTI-AGENT ORCHESTRATION
 # ═══════════════════════════════════════════════════════
@@ -345,77 +612,23 @@ def build_refund_agent() -> Agent:
         "You decide return/refund eligibility using facts already gathered by the Inventory Agent.\n\n"
         "Decision process (always follow this order):\n"
         "1. Call get_inventory_context(session_id, order_id=...) with the specific order_id "
-        "from the customer request (e.g. ORD-27176) to obtain the structured eligibility "
-        "result (eligible, days_since_order, window_days, reason, order facts, customer tier).\n"
-        "2. The eligibility flag is computed deterministically in code — do NOT recompute dates yourself.\n"
-        "3. If eligible is true, call initiate_refund with the customer_id, order_id and reason, "
-        "then report the confirmation (return_reference).\n"
-        "4. If eligible is false, clearly state the reason from the structured result and do NOT "
+        "from the customer request or conversation context (e.g. ORD-27176) to obtain the structured "
+        "eligibility result (eligible, days_since_delivery, window_days, reason, order facts, tier).\n"
+        "2. The eligibility flag is computed deterministically in code - do NOT recompute dates yourself.\n"
+        "3. If eligible is true AND the customer asked to return the item (e.g. 'I want to return...'), "
+        "call initiate_refund IMMEDIATELY with the customer_id, order_id and a reason. Use the reason the "
+        "customer gave; if they gave none, use exactly 'Customer requested return (no reason given)'. "
+        "Do NOT ask the customer for a reason or confirmation first - the return is started now and the "
+        "customer can add details later. Then report the return_reference.\n"
+        "4. If the customer is only asking whether they COULD return something, report eligibility "
+        "without calling initiate_refund.\n"
+        "5. If eligible is false, clearly state the reason from the structured result and do NOT "
         "call initiate_refund.\n\n"
         "Never invent data. Never override the eligible flag. Be concise and decisive."
     )
 
-    def _compute_eligibility(order: dict, customer: dict) -> dict:
-        """
-        Deterministic eligibility check.
-        Standard tier = 30 days, Premium tier = 60 days from order_date.
-        """
-        from datetime import datetime, date
-
-        tier = (customer.get("tier") or "Standard").strip()
-        window_days = 60 if tier.lower() == "premium" else 30
-
-        status = str(order.get("status") or "").strip().lower()
-        if status != "delivered":
-            reason = ("A return has already been initiated for this order"
-                      if status == "return initiated" else
-                      f"Order status is '{order.get('status')}' - only delivered orders can be returned")
-            return {"eligible": False, "days_since_order": None, "window_days": window_days,
-                    "tier": tier, "reason": reason}
-
-        order_date_str = order.get("order_date") or order.get("orderDate") or ""
-        try:
-            order_date = datetime.strptime(str(order_date_str)[:10], "%Y-%m-%d").date()
-        except (ValueError, TypeError):
-            return {
-                "eligible": False,
-                "days_since_order": None,
-                "window_days": window_days,
-                "tier": tier,
-                "reason": f"Cannot parse order_date '{order_date_str}'",
-            }
-
-        today = date.today()
-        days_since = (today - order_date).days
-
-        if days_since < 0:
-            return {
-                "eligible": False,
-                "days_since_order": days_since,
-                "window_days": window_days,
-                "tier": tier,
-                "reason": "Order date is in the future",
-            }
-
-        if days_since <= window_days:
-            return {
-                "eligible": True,
-                "days_since_order": days_since,
-                "window_days": window_days,
-                "tier": tier,
-                "reason": f"Within {tier} {window_days}-day return window ({days_since} days since order)",
-            }
-
-        return {
-            "eligible": False,
-            "days_since_order": days_since,
-            "window_days": window_days,
-            "tier": tier,
-            "reason": (
-                f"Outside {tier} {window_days}-day return window "
-                f"({days_since} days since order)"
-            ),
-        }
+    # Tool outcomes of the current run - read by route_to_refund_agent (deterministic backstop).
+    refund_state = {}
 
     @tool
     def get_inventory_context(session_id: str, order_id: str = None) -> dict:
@@ -486,11 +699,14 @@ def build_refund_agent() -> Agent:
 
         eligibility = _compute_eligibility(order, customer) if order else {
             "eligible": False,
+            "days_since_delivery": None,
             "days_since_order": None,
             "window_days": None,
             "tier": customer.get("tier", "unknown"),
             "reason": "Order not found or could not be resolved from inventory context",
         }
+        refund_state.update(eligibility=eligibility, order_id=resolved_order_id,
+                            customer_id=customer_id)
 
         return {
             "inventory_agent": inventory_text,
@@ -507,18 +723,25 @@ def build_refund_agent() -> Agent:
         """
         Initiate a return by updating the order record in DynamoDB.
         Refuses the write if the order is outside the tier return window
-        (Standard=30 days, Premium=60 days). Eligibility is recomputed here
-        so a hallucinated 'eligible' from the LLM cannot bypass the check.
+        (Standard=30 days, Premium=60 days from delivery). Eligibility is recomputed
+        here so a hallucinated 'eligible' from the LLM cannot bypass the check.
 
         Args:
             customer_id: The customer's unique identifier
             order_id: The order to return
             reason: Customer-provided reason for the return
+                    ('Customer requested return (no reason given)' if none was given)
 
         Returns:
             Confirmation dict with return_reference number and instructions,
             or an error if not eligible / order missing
         """
+        result = _do_initiate(customer_id, order_id, reason)
+        refund_state['refund'] = result
+        return result
+
+    def _do_initiate(customer_id: str, order_id: str, reason: str) -> dict:
+        """Shared implementation of initiate_refund (also used by the backstop)."""
         orders_table = dynamodb.Table(config.ORDERS_TABLE)
         cust_table = dynamodb.Table(config.CUSTOMERS_TABLE)
 
@@ -573,11 +796,14 @@ def build_refund_agent() -> Agent:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    return Agent(
+    agent = Agent(
         model=model,
         system_prompt=system_prompt,
         tools=[get_inventory_context, initiate_refund],
     )
+    agent.refund_state = refund_state
+    agent.initiate_refund_direct = _do_initiate
+    return agent
 
 
 # ───────────────────────────────────────────────────────
@@ -758,7 +984,12 @@ def build_communication_agent() -> Agent:
         "- Includes all relevant facts (order status, eligibility, policy details, return reference)\n"
         "- Explains any denial clearly and offers next steps\n"
         "- Never invents information that is not present in the workflow state\n"
-        "Keep the tone helpful and human. Sign off as \"NovaMart Support\"."
+        "- Uses the conversation context (earlier turns) when the customer refers back to them\n"
+        "Keep the tone helpful and human. Sign off as \"NovaMart Support\".\n\n"
+        "OUTPUT FORMAT (strict): your reply is sent to the customer verbatim. Output ONLY the message "
+        "itself - start directly with the greeting. No preamble or commentary about the workflow, the "
+        "context, other agents or what you are about to do (never write things like 'I can see...', "
+        "'Let me compose...', 'Here is the response'), no 'Subject:' line and no '---' separators."
     )
 
     @tool
@@ -781,6 +1012,8 @@ def build_communication_agent() -> Agent:
             "inventory_agent": state.get("inventory_agent"),
             "policy_agent": state.get("policy_agent"),
             "refund_agent": state.get("refund_agent"),
+            "conversation_context": state.get("memory_context") or "",
+            "current_request": state.get("current_request") or "",
             "version": int(state.get("version", 0)),
         }
 
@@ -822,6 +1055,10 @@ def build_orchestrator_agent(
         "Never send these to the Policy Agent.\n"
         "5. Pure math / calculation questions → skip Inventory, Policy and Refund; go straight to Communication Agent.\n"
         "6. EVERY request → call route_to_communication_agent as the VERY LAST step. No exceptions.\n\n"
+        "FOLLOW-UPS: if the prompt contains a [Conversation so far] block, use it to understand what the "
+        "customer is referring to (e.g. 'what is my return reference?' refers to the order discussed "
+        "earlier → rule 2 with that order). Include the relevant order id in the request text you pass "
+        "to the workers.\n\n"
         "Extract session_id and customer_id from the prompt tags [Session ID: ...] [Customer ID: ...]. "
         "Pass the original customer request text to the workers. "
         "After all required workers have run, call route_to_communication_agent so the final reply "
@@ -867,7 +1104,8 @@ def build_orchestrator_agent(
         state = _read_workflow_state(session_id) or {}
         old_version = int(state.get("version", 0))
 
-        prompt = f"[Session ID: {session_id}] [Customer ID: {customer_id}] {request}"
+        prompt = (f"[Session ID: {session_id}] [Customer ID: {customer_id}] "
+                  f"{_with_context(session_id, request)}")
         inventory_agent.messages.clear()
         result = inventory_agent(prompt)
         text = str(result)
@@ -919,10 +1157,31 @@ def build_orchestrator_agent(
         state = _read_workflow_state(session_id) or {}
         old_version = int(state.get("version", 0))
 
-        prompt = f"[Session ID: {session_id}] [Customer ID: {customer_id}] {request}"
+        prompt = (f"[Session ID: {session_id}] [Customer ID: {customer_id}] "
+                  f"{_with_context(session_id, request)}")
         refund_agent.messages.clear()
+        rstate = getattr(refund_agent, 'refund_state', None)
+        if rstate is not None:
+            rstate.clear()
         result = refund_agent(prompt)
         text = str(result)
+
+        # Deterministic backstop: an explicit, eligible return request must create the
+        # return even if the LLM chose to ask a follow-up question instead.
+        if rstate is not None and hasattr(refund_agent, 'initiate_refund_direct'):
+            elig = rstate.get('eligibility') or {}
+            done = (rstate.get('refund') or {}).get('success')
+            order_id = rstate.get('order_id')
+            if elig.get('eligible') and not done and order_id and _explicit_return_intent(request):
+                res = refund_agent.initiate_refund_direct(
+                    rstate.get('customer_id') or customer_id, order_id,
+                    'Customer requested return (no reason given)')
+                rstate['refund'] = res
+                if res.get('success'):
+                    text = (f"Return initiated for {order_id}: reference {res['return_reference']} "
+                            f"(status Return Initiated). {elig.get('reason', '')}. "
+                            "The customer does not need to provide anything else now; a prepaid label "
+                            "will be emailed.")
 
         _update_workflow_state(session_id, {"refund_agent": text}, old_version)
         trace.step_done("refund_agent", old_version)
@@ -950,11 +1209,12 @@ def build_orchestrator_agent(
         prompt = (
             f"[Session ID: {session_id}] [Customer ID: {customer_id}] "
             f"Original customer request: {original_request}\n"
-            "Compose the final customer-facing reply using the full workflow context."
+            "Compose the final customer-facing reply using the full workflow context. "
+            "Output only the message to the customer."
         )
         communication_agent.messages.clear()
         result = communication_agent(prompt)
-        text = str(result)
+        text = _final_customer_text(str(result))
 
         _update_workflow_state(session_id, {"communication_agent": text}, old_version)
         trace.step_done("communication_agent", old_version)
@@ -1217,6 +1477,9 @@ def deploy_to_agentcore_runtime(
         "AGENT_LOG_GROUP": config.AGENT_LOG_GROUP,
         "GUARDRAIL_ID": guardrail_id,
         "GUARDRAIL_VERSION": guardrail_version,
+        # Known on re-deploys (Step 4 creates the memory on the first deploy and
+        # deploy_all() adds it to the runtime environment before Step 5).
+        "AGENTCORE_MEMORY_ID": os.environ.get("AGENTCORE_MEMORY_ID", ""),
     }
 
     agentcore_cli.configure_runtime(
@@ -1558,12 +1821,14 @@ def invoke_agent(session_id: str, customer_id: str, user_message: str) -> dict:
     Invoke the deployed agent via AgentCore Runtime (see run_serve).
 
     AgentCore requires runtimeSessionId to be at least 33 characters, so the
-    short project session id is embedded in a longer, unique runtime session id.
+    short project session id is embedded in a longer runtime session id. The
+    mapping is deterministic (_runtime_session_id), so invoking again with the
+    same session_id continues the same runtime session and conversation.
     """
     if not config.AGENTCORE_RUNTIME_ARN:
         raise RuntimeError("AGENTCORE_RUNTIME_ARN is not set - run the deploy command first")
 
-    runtime_session_id = f"{session_id}-{uuid.uuid4().hex}"     # >= 33 chars
+    runtime_session_id = _runtime_session_id(session_id)       # >= 33 chars, stable
     payload = json.dumps({
         'prompt':      user_message,
         'session_id':  session_id,
@@ -1617,6 +1882,11 @@ def deploy_all():
 
     print("Step 4/6: Configuring Memory...")
     memory_arn = configure_memory(runtime_arn)
+    memory_id = memory_arn.split('/')[-1]
+    os.environ["AGENTCORE_MEMORY_ID"] = memory_id
+    # Declared now, applied by the `agentcore deploy` that Step 5 runs.
+    agentcore_cli.configure_runtime(env_vars={"AGENTCORE_MEMORY_ID": memory_id})
+    print(f"  Runtime will use AgentCore Memory {memory_id} (AGENTCORE_MEMORY_ID)")
     print()
 
     print("Step 5/6: Configuring Observability...")
@@ -1642,7 +1912,8 @@ def deploy_all():
     print(f"\n  Add these to your .env file:")
     print(f"  AGENTCORE_RUNTIME_ARN={runtime_arn}")
     print(f"  GUARDRAIL_ID={guardrail_id}")
-    print(f"  GUARDRAIL_VERSION={guardrail_version}\n")
+    print(f"  GUARDRAIL_VERSION={guardrail_version}")
+    print(f"  AGENTCORE_MEMORY_ID={memory_id}\n")
     print(f"  Then try the deployed runtime:")
     print(f"  python src/agent_orchestrator.py invoke \"What is the return policy for premium customers?\"")
     print(f"  or with the CLI:  agentcore invoke \"What is the return policy for premium customers?\"")
@@ -1681,11 +1952,14 @@ def run_test_scenarios() -> None:
         print(f"\n{'─'*60}")
         print(f"Session: {session_id} | Customer: {customer_id}")
         print(f"Query: {query}")
-        prompt = f"[Session ID: {session_id}] [Customer ID: {customer_id}] {query}"
+        prompt = _prepare_turn(session_id, customer_id, query)
         orchestrator.messages.clear()
         with tracer.trace_request(session_id, customer_id, query):
             response = orchestrator(prompt)
-        print(f"Response: {response}")
+        state = _read_workflow_state(session_id) or {}
+        text = _final_customer_text(state.get('communication_agent', '') or str(response))
+        _finish_turn(session_id, customer_id, query, text)
+        print(f"\nResponse: {text}")
         print_trace_hint()
     flush_logs()
 
@@ -1749,8 +2023,8 @@ def run_chat() -> None:
             print(f"  {_C.GRY}Session ended.{_C.RESET}")
             break
 
-        prompt  = (f"[Session ID: {session_id}] "
-                   f"[Customer ID: {customer_id}] {user_input}")
+        prompt  = _prepare_turn(session_id, customer_id, user_input)
+        orchestrator.messages.clear()     # context comes from WorkflowState + AgentCore Memory
         t0_turn = time.time()
 
         # ── Install proxy, run orchestrator (traced), restore stdout ───
@@ -1767,7 +2041,8 @@ def run_chat() -> None:
         # ── Resolve the final customer-facing text ────────────────────
         final_state = _read_workflow_state(session_id) or {}
         comm_result = final_state.get('communication_agent', '')
-        text = _strip_xml_tags(comm_result or str(response))
+        text = _final_customer_text(comm_result or str(response))
+        _finish_turn(session_id, customer_id, user_input, text)
 
         # ── DynamoDB workflow state summary ───────────────────────────
         trace.summary(session_id, elapsed)
@@ -1787,14 +2062,22 @@ def run_chat() -> None:
     flush_logs()
 
 
-def run_invoke(message: str, customer_id: str = "CUST-001") -> None:
-    """Send one message to the deployed AgentCore Runtime and print the reply."""
-    session_id = str(uuid.uuid4())[:8]
+def run_invoke(message: str, customer_id: str = "CUST-001", session_id: str = None) -> None:
+    """
+    Send one message to the deployed AgentCore Runtime and print the reply.
+    Pass the same session_id (--session-id, or NOVAMART_SESSION_ID) on the next
+    invoke to continue the conversation.
+    """
+    session_id = session_id or os.environ.get('NOVAMART_SESSION_ID') or str(uuid.uuid4())[:8]
     print(f"Invoking {config.AGENTCORE_RUNTIME_ARN}")
     print(f"Session: {session_id} | Customer: {customer_id}")
+    print(f"  (continue this conversation with:  --session-id {session_id})")
     print(f"Query: {message}\n")
     result = invoke_agent(session_id, customer_id, message)
     print(f"Response: {result.get('result', result)}")
+    if 'turn' in result:
+        print(f"Turn {result['turn']} of session {result.get('session_id', session_id)} | "
+              f"saved to AgentCore Memory: {'yes' if result.get('memory') else 'no'}")
     if result.get('trace_id'):
         print(f"X-Ray trace: {result['trace_id']}")
 
@@ -1844,17 +2127,21 @@ def run_serve() -> None:
         if not prompt:
             return {'error': "payload must include 'prompt'"}
 
-        enriched = f"[Session ID: {session_id}] [Customer ID: {customer_id}] {prompt}"
         orchestrator = _orchestrator()
         with invoke_lock:            # Strands agents reject concurrent invocations
+            # Per-session context lives in WorkflowState + AgentCore Memory, not in the
+            # shared agent's history, so clearing it keeps customers isolated while
+            # consecutive turns of one session still see their conversation.
+            enriched = _prepare_turn(session_id, customer_id, prompt)
             orchestrator.messages.clear()
             with tracer.trace_request(session_id, customer_id, prompt):
                 response = orchestrator(enriched)
-
-        state = _read_workflow_state(session_id) or {}
-        text  = _strip_xml_tags(state.get('communication_agent', '') or str(response))
+            state = _read_workflow_state(session_id) or {}
+            text  = _final_customer_text(state.get('communication_agent', '') or str(response))
+            remembered = _finish_turn(session_id, customer_id, prompt, text)
         flush_logs()
         return {'result': text, 'session_id': session_id, 'customer_id': customer_id,
+                'turn': int(state.get('turn', 1) or 1), 'memory': bool(remembered),
                 'trace_id': tracer.last_trace_id}
 
     app.run()
@@ -1881,15 +2168,26 @@ if __name__ == '__main__':
         run_chat()
 
     elif command == 'invoke':
-        if len(sys.argv) < 3:
-            print('Usage: python src/agent_orchestrator.py invoke "<message>" [CUSTOMER_ID]')
+        args = sys.argv[2:]
+        sess = None
+        for flag in ('--session-id', '-s'):
+            if flag in args:
+                i = args.index(flag)
+                if i + 1 >= len(args):
+                    print(f'{flag} needs a value'); sys.exit(1)
+                sess = args[i + 1]
+                del args[i:i + 2]
+        if not args:
+            print('Usage: python src/agent_orchestrator.py invoke "<message>" [CUSTOMER_ID] '
+                  '[--session-id ID]')
             sys.exit(1)
-        run_invoke(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "CUST-001")
+        run_invoke(args[0], args[1] if len(args) > 1 else "CUST-001", sess)
 
     else:
         print("Usage:")
         print("  python src/agent_orchestrator.py deploy           # Deploy to AgentCore (Tasks 3-6)")
         print("  python src/agent_orchestrator.py test             # Run the 3 test scenarios locally")
         print("  python src/agent_orchestrator.py chat             # Interactive terminal chat")
-        print("  python src/agent_orchestrator.py invoke \"<msg>\"   # Call the deployed runtime")
+        print("  python src/agent_orchestrator.py invoke \"<msg>\" [CUST-ID] [--session-id ID]"
+              "   # Call the deployed runtime")
         print("  python src/agent_orchestrator.py serve            # HTTP server (used inside AgentCore Runtime)")
