@@ -1,0 +1,77 @@
+[
+  {
+    "name": "novamart-returns-policy-kb",
+    "knowledgeBaseId": "PD8S9AR9AT",
+    "status": "ACTIVE",
+    "embeddingModel": "amazon.titan-embed-text-v2:0",
+    "vectorStore": "S3_VECTORS",
+    "vectorBucketArn": "arn:aws:s3vectors:us-east-1:802732818729:bucket/udacity-agentcore-vectors-802732818729-f4bc6d30",
+    "indexName": "returns-policy-index",
+    "dataSourcePrefixes": [
+      "policies/returns/"
+    ],
+    "lastIngestionJob": {
+      "status": "COMPLETE",
+      "statistics": {
+        "numberOfDocumentsScanned": 2,
+        "numberOfMetadataDocumentsScanned": 0,
+        "numberOfNewDocumentsIndexed": 2,
+        "numberOfModifiedDocumentsIndexed": 0,
+        "numberOfMetadataDocumentsModified": 0,
+        "numberOfDocumentsDeleted": 0,
+        "numberOfDocumentsFailed": 0,
+        "numberOfDocumentsSkipped": 0
+      }
+    }
+  },
+  {
+    "name": "novamart-shipping-policy-kb",
+    "knowledgeBaseId": "JH2SOUPQEE",
+    "status": "ACTIVE",
+    "embeddingModel": "amazon.titan-embed-text-v2:0",
+    "vectorStore": "S3_VECTORS",
+    "vectorBucketArn": "arn:aws:s3vectors:us-east-1:802732818729:bucket/udacity-agentcore-vectors-802732818729-f4bc6d30",
+    "indexName": "shipping-policy-index",
+    "dataSourcePrefixes": [
+      "policies/shipping/"
+    ],
+    "lastIngestionJob": {
+      "status": "COMPLETE",
+      "statistics": {
+        "numberOfDocumentsScanned": 2,
+        "numberOfMetadataDocumentsScanned": 0,
+        "numberOfNewDocumentsIndexed": 2,
+        "numberOfModifiedDocumentsIndexed": 0,
+        "numberOfMetadataDocumentsModified": 0,
+        "numberOfDocumentsDeleted": 0,
+        "numberOfDocumentsFailed": 0,
+        "numberOfDocumentsSkipped": 0
+      }
+    }
+  },
+  {
+    "name": "novamart-warranty-policy-kb",
+    "knowledgeBaseId": "8G7AOXWUTD",
+    "status": "ACTIVE",
+    "embeddingModel": "amazon.titan-embed-text-v2:0",
+    "vectorStore": "S3_VECTORS",
+    "vectorBucketArn": "arn:aws:s3vectors:us-east-1:802732818729:bucket/udacity-agentcore-vectors-802732818729-f4bc6d30",
+    "indexName": "warranty-policy-index",
+    "dataSourcePrefixes": [
+      "policies/warranty/"
+    ],
+    "lastIngestionJob": {
+      "status": "COMPLETE",
+      "statistics": {
+        "numberOfDocumentsScanned": 2,
+        "numberOfMetadataDocumentsScanned": 0,
+        "numberOfNewDocumentsIndexed": 2,
+        "numberOfModifiedDocumentsIndexed": 0,
+        "numberOfMetadataDocumentsModified": 0,
+        "numberOfDocumentsDeleted": 0,
+        "numberOfDocumentsFailed": 0,
+        "numberOfDocumentsSkipped": 0
+      }
+    }
+  }
+]

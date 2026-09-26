@@ -1,0 +1,122 @@
+Script started on 2026-09-26 21:09:10+02:00 [COMMAND="/workspace/venv/bin/python tests/test_agent.py all" <not executed on terminal>]
+
+───────────────────────────────────────────────────────
+  Task 2 - Multi-Agent Orchestration
+───────────────────────────────────────────────────────
+  ✓ PASS [+5pts] build_inventory_agent() returns an Agent object
+  ✓ PASS [+5pts] InventoryAgent has 3 tools (3 found)
+  ✓ PASS [+5pts] build_policy_agent() returns an Agent object
+  ✓ PASS [+5pts] PolicyAgent has 1 tool (1 found)
+  ✓ PASS [+5pts] build_orchestrator_agent() returns an Agent object
+  ✓ PASS [+5pts] OrchestratorAgent has 5 routing tools (5 found)
+  ✓ PASS [+5pts] OrchestratorAgent uses config.ORCHESTRATOR_MODEL_ID (Claude Haiku 4.5 - correct for routing)
+  ✓ PASS [+5pts] Worker agents use config.WORKER_MODEL_ID (Claude Sonnet 4.5 - correct for reasoning)
+  ✓ PASS [+0pts] build_policy_agent() runs the retrievers with ThreadPoolExecutor
+
+───────────────────────────────────────────────────────
+  Task 3 - AgentCore Deployment + Guardrails
+───────────────────────────────────────────────────────
+  ✓ PASS [+5pts] Guardrail 'udacity-agentcore-guardrail' exists in Bedrock
+  ✓ PASS [+5pts] Guardrail content, PII, topic and word policies match the specification
+  ✓ PASS [+3pts] Guardrail version 1 is published and READY
+  ✓ PASS [+7pts] AgentCore Runtime is READY (PUBLIC / HTTP) with guardrail + KB environment variables
+
+───────────────────────────────────────────────────────
+  Task 4 - Memory
+───────────────────────────────────────────────────────
+  ✓ PASS [+5pts] AgentCore Memory udacity_agentcore_memory-Q347dYFGUi is ACTIVE
+  ✓ PASS [+5pts] Memory uses the SESSION_SUMMARY (summaryMemoryStrategy) strategy
+  ✓ PASS [+5pts] Memory eventExpiryDuration is 7 days
+
+───────────────────────────────────────────────────────
+  Task 5 - Bedrock Knowledge Bases
+───────────────────────────────────────────────────────
+  ✓ PASS [+5pts] RETURNS_KB_ID is set in environment (PD8S9AR9AT)
+  ✓ PASS [+0pts] Returns Knowledge Base is ACTIVE
+  ✓ PASS [+0pts] Returns KB uses amazon.titan-embed-text-v2:0
+  ✓ PASS [+0pts] Returns KB data source has a completed sync
+  ✓ PASS [+5pts] SHIPPING_KB_ID is set in environment (JH2SOUPQEE)
+  ✓ PASS [+0pts] Shipping Knowledge Base is ACTIVE
+  ✓ PASS [+0pts] Shipping KB uses amazon.titan-embed-text-v2:0
+  ✓ PASS [+0pts] Shipping KB data source has a completed sync
+  ✓ PASS [+5pts] WARRANTY_KB_ID is set in environment (8G7AOXWUTD)
+  ✓ PASS [+0pts] Warranty Knowledge Base is ACTIVE
+  ✓ PASS [+0pts] Warranty KB uses amazon.titan-embed-text-v2:0
+  ✓ PASS [+0pts] Warranty KB data source has a completed sync
+  ✓ PASS [+5pts] All three Knowledge Bases return passages for a policy question
+    [PARALLEL RETRIEVAL - START]  Spawning 3 sub-agents concurrently via ThreadPoolExecutor
+    ──────────────────────────────────────────────────────
+    +-- [SUB-AGENT 01]  ReturnsRetriever   KB-ID: PD8S9AR9AT
+    +-- [SUB-AGENT 02]  ShippingRetriever  KB-ID: JH2SOUPQEE
+    +-- [SUB-AGENT 03]  WarrantyRetriever  KB-ID: 8G7AOXWUTD
+    Retrieving in parallel... (sub-agent output suppressed - clean results printed sequentially after [END])
+
+Tool #1: retrieve_returns_policy
+
+Tool #1: retrieve_warranty_policy
+
+Tool #1: retrieve_shipping_policy
+Based on the Returns Policy documents:Based
+
+**Premium Customer on the warranty policy documents Return Window:**
+- **Based60 on the shipping:  policy information
+
+**Returndays** from delivery: ( Window for Premium Customers:**
+
+**Premiumcompared 60 Customer  to 30 days for Standard customers Return Window:**)days 60
+
+**Warranty:**
+- **3
+
+**Warranty Length for - Premium Customers:** 3 yearsdaysyear warranty on
+
+**Warranty for on electronics
+
+According Premium Customers:** 3  electronics** for to the policy,years on electronics
+
+Premium Premium customers ( Premium tiercompared to 1-year warranty tier customers receive an for Standard customers)
+
+To customers ( extended 60-day return window ( qualifythose whocompared for Premium spend $500+ or tier status to  place 20+ orders in, customers need30 days for standard a calendar year) receive: to either customers)
+- An spend and a extended 60-day return window ( 3-year warranty on electronics (compared $500+ in a calendar year OR place 20+ orders in a calendarcompared to 1 year for standard to  year. Once customers).30 days for Standard customers qualified)
+- A Customers automatically, customers 3-year warranty on electronics ( qualify arecompared to 1 for Premium automatically upgraded and- tier receive theseyear for Standard customers on when they spend $500+ or extended electronics, place 20+ orders in a calendar or benefits. 2-year standard year. warranty mentioned in the general warranty policy)    ──────────────────────────────────────────────────────
+    [PARALLEL RETRIEVAL - END]  All 3 KBs responded  Elapsed: 6.1s
+
+    [SUB-AGENT 01]  ReturnsRetriever   KB: PD8S9AR9AT
+      | Based on the Returns Policy documents:
+      | **Premium Customer Return Window:**
+      | - **60 days** from delivery (compared to 30 days for Standard customers)
+      | **Warranty:**
+      | - **3-year warranty on electronics** for Premium customers (compared to 1-year warranty for Standard customers)
+      | To qualify for Premium tier status, customers need to either spend $500+ in a calendar year OR place 20+ orders in a calendar year. Once qualified, customers are automatically upgraded and receive these extended benefits.
+
+    [SUB-AGENT 02]  ShippingRetriever  KB: JH2SOUPQEE
+      | Based on the shipping policy information:
+      | **Premium Customer Return Window:** 60 days
+      | **Warranty for Premium Customers:** 3 years on electronics
+      | Premium tier customers receive an extended 60-day return window (compared to 30 days for standard customers) and a 3-year warranty on electronics (compared to 1 year for standard customers). Customers automatically qualify for Premium tier when they spend $500+ or place 20+ orders in a calendar year.
+
+    [SUB-AGENT 03]  WarrantyRetriever  KB: 8G7AOXWUTD
+      | Based on the warranty policy documents:
+      | **Return Window for Premium Customers:** 60 days
+      | **Warranty Length for Premium Customers:** 3 years on electronics
+      | According to the policy, Premium tier customers (those who spend $500+ or place 20+ orders in a calendar year) receive:
+      | - An extended 60-day return window (compared to 30 days for Standard customers)
+      | - A 3-year warranty on electronics (compared to 1-year for Standard customers on electronics, or 2-year standard warranty mentioned in the general warranty policy)
+  ✓ PASS [+5pts] search_all_policies() returned combined results from the three retrievers (6.1s)
+
+───────────────────────────────────────────────────────
+  Task 6 - Observability
+───────────────────────────────────────────────────────
+  ✓ PASS [+10pts] CloudWatch logging enabled at INFO level → /aws/bedrock/agentcore/udacity-agentcore
+  ℹ INFO latest agent log stream: agentcore-runtime/localhost/2026-09-26/ecace5d8 (226 min ago)
+  ✓ PASS [+10pts] X-Ray tracing enabled: 100% sampling, Transaction Search → CloudWatch Logs (ACTIVE)
+  ℹ INFO no NovaMart traces in X-Ray yet - run `python src/agent_orchestrator.py test` (or `invoke`) and wait ~60 s
+
+═══════════════════════════════════════════════════════
+  Score: 120/120 pts (100%)
+═══════════════════════════════════════════════════════
+
+  🎉 Perfect score! All tasks complete.
+
+
+Script done on 2026-09-26 21:09:25+02:00 [COMMAND_EXIT_CODE="0"]

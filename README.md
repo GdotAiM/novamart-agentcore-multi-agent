@@ -208,6 +208,10 @@ This creates `novamart-returns-policy-kb`, `novamart-shipping-policy-kb` and `no
 
 Do **not** use *Quick create a new vector store*.
 
+**Console view of the three Knowledge Bases.** Each uses Titan Text Embeddings v2 on the stack's S3 Vectors store, with its data source on the matching `policies/<name>/` prefix and a completed sync. The console leaves the *S3 vector index* field blank, so the index names (`returns-policy-index`, `shipping-policy-index`, `warranty-policy-index`) are confirmed from the Bedrock API in [docs/knowledge-bases.json](docs/knowledge-bases.json).
+
+![Bedrock console: the three NovaMart Knowledge Bases](docs/screenshots/kb-console/kb-list.png)
+
 ### 5. Test locally
 
 ```bash
@@ -305,6 +309,11 @@ No checks failed, in either round. The offline tests for the fixes, `tests/test_
 ![Final score 120/120](docs/screenshots/11-test-all-p2.png)
 *`tests/test_agent.py all` after the round-2 re-deploy: **Score: 120/120 pts (100%)**.*
 
+**Re-run with the starter's files restored (26 Sep 2026, 21:09 SAST).** After `starter_stack.yaml`, `seed_data.py` and `demo.py` were reverted to the exact starter versions and the data was reseeded with the original `seed_data.py`, the full suite was run again against the live deployment: **120/120, no failures**. Terminal screenshots are below, and the full text output is in [docs/test-all-output.txt](docs/test-all-output.txt).
+
+![Terminal: 120/120 after restoring the starter files](docs/screenshots/24-test-all-terminal.png)
+*Live terminal: Task 5 and Task 6 checks and **Score: 120/120 pts (100%)**.* Earlier tasks: [25-test-all-terminal-top.png](docs/screenshots/25-test-all-terminal-top.png).
+
 ### Deployed runtime: the three demo scenarios (`invoke`)
 
 | Scenario | Outcome (round 2) |
@@ -318,7 +327,7 @@ No checks failed, in either round. The offline tests for the fixes, `tests/test_
 | ![Invoke - return](docs/screenshots/12-invoke-return.png) | ![Invoke - policy](docs/screenshots/13-invoke-policy.png) | ![Invoke - maths](docs/screenshots/14-invoke-math.png) |
 
 ![DynamoDB after the return invoke](docs/screenshots/16-return-dynamodb.png)
-*The order record after the return invoke: `Return Initiated`, with `delivered_date` 2026-09-18 and return reference `RET-27176-36065`.*
+*The order record after the return invoke: `Return Initiated`, with return reference `RET-27176-36065`. (This capture predates restoring `seed_data.py` to the starter version, so it still shows a `delivered_date` field.)*
 
 ### Multi-turn session with AgentCore Memory
 
@@ -394,6 +403,9 @@ Screenshots taken live in the CloudWatch X-Ray console (us-east-1, 1-hour range)
 | 21 | X-Ray `Default` indexing rule (100%) | [21-xray-indexing.png](docs/screenshots/21-xray-indexing.png) |
 | 22 | X-Ray console: Trace/Service Map (1 h) | [22-xray-service-map.png](docs/screenshots/22-xray-service-map.png) |
 | 23 | X-Ray console: NovaMart-Orchestrator traces (8, all OK) | [23-xray-traces.png](docs/screenshots/23-xray-traces.png) |
+| 24 | Terminal: `tests/test_agent.py all` 120/120 with starter files restored | [24-test-all-terminal.png](docs/screenshots/24-test-all-terminal.png) |
+| 25 | Terminal: earlier tasks of the same run | [25-test-all-terminal-top.png](docs/screenshots/25-test-all-terminal-top.png) |
+| KB | Bedrock console: the three Knowledge Bases (list and details) | [kb-list](docs/screenshots/kb-console/kb-list.png) · [returns](docs/screenshots/kb-console/kb-returns-1.png) ([2](docs/screenshots/kb-console/kb-returns-2.png)) · [shipping](docs/screenshots/kb-console/kb-shipping-1.png) ([2](docs/screenshots/kb-console/kb-shipping-2.png)) · [warranty](docs/screenshots/kb-console/kb-warranty-1.png) ([2](docs/screenshots/kb-console/kb-warranty-2.png)) |
 
 ![01 stack](docs/screenshots/01-stack.png)
 ![20 unit tests](docs/screenshots/20-unit-tests.png)
@@ -405,26 +417,25 @@ Screenshots taken live in the CloudWatch X-Ray console (us-east-1, 1-hour range)
 
 ## Bugs found and fixed
 
-The starter was audited before deployment, and the live run revealed a few more issues. **17 fixes** in total are described in **[docs/FIXES.md](docs/FIXES.md)**; the round-1 patch is in [docs/fixes.diff](docs/fixes.diff).
+The starter was audited before deployment, and the live run revealed a few more issues. **17 fixes** are described in **[docs/FIXES.md](docs/FIXES.md)**. Three of them (1, 2 and 11) changed starter files on the course's "never modify" list and have since been **reverted**, so 14 remain in place. The round-1 patch is in [docs/fixes.diff](docs/fixes.diff).
 
 **Round 1 (before the first deployment):**
 
-- **S3 Vectors indexes:** `AMAZON_BEDROCK_METADATA` is now non-filterable.
 - **Refund safety:** only `delivered` orders are eligible, which prevents double refunds.
 - **Session isolation:** agents' conversation histories are cleared per request.
 - **Concurrency:** the `serve` entry point serialises concurrent invocations.
 - **Guardrail:** attached to the retriever sub-agents too, and always a numbered version.
-- Explicit Bedrock region, `.env` support in `seed_data.py`, `Decimal` → `int`, and the real elapsed time in `demo.py`.
+- Explicit Bedrock region and `Decimal` → `int`.
 
 **Round 2 (the "Known issues" from the first live run):**
 
 - **AgentCore Memory is wired in.** Each turn loads the session's earlier turns and summaries of the customer's past sessions, then saves the new turn. It is skipped cleanly when `AGENTCORE_MEMORY_ID` isn't set.
 - **Multi-turn sessions.** `invoke --session-id` gives a stable runtime session, and WorkflowState starts a fresh *turn* on the same session.
-- **Delivery-date return windows.** Seeded orders now carry `delivered_date`, with fallbacks to `estimated_delivery` and then `order_date`.
+- **Delivery-date return windows.** Eligibility counts from `delivered_date` when an order has one, then from `estimated_delivery` once that date has passed, then from `order_date`. The starter's seed data has no `delivered_date`, so seeded orders use `estimated_delivery`; every seeded verdict is unchanged.
 - **Reliable refunds.** A prompt change plus a deterministic backstop mean an eligible, explicit return request always creates the return.
 - **Clean replies.** A strict output format and a sanitiser remove any agent narration before the reply reaches the customer.
 
-> **Note:** fixes touch files the course lists as "never modify": `infrastructure/starter_stack.yaml`, `infrastructure/seed_data.py` (round 1 and round 2) and `src/demo.py`. `config.py` and `tests/test_agent.py` are unchanged. `tests/test_known_issues.py` is a new, additional file.
+> **Note:** every file on the course's "never modify" list is identical to the Udacity starter, including `infrastructure/starter_stack.yaml`, `infrastructure/seed_data.py`, `src/demo.py`, `config.py` and `tests/test_agent.py`. All fixes live in `src/agent_orchestrator.py` (the student file). `tests/test_known_issues.py` is a new, additional file.
 
 ---
 
@@ -441,7 +452,7 @@ The starter was audited before deployment, and the live run revealed a few more 
 - **Memory summaries are asynchronous.** SESSION_SUMMARY records for past sessions are generated by AgentCore in the background, so a brand-new session only sees the summaries that already exist. Turns within the current session come from raw events and are available immediately.
 - **The refund backstop is heuristic.** "Explicit return intent" is detected with patterns such as "I want to return…", "please start a return…" and "refund my…". Phrasing it doesn't recognise falls back to the LLM's own decision. Questions like "Can I return…?" deliberately only report eligibility.
 - **The reply sanitiser is heuristic too.** It removes narration it can recognise; the prompt's output-format rules are the primary control.
-- **Seeded delivery dates are synthetic** (order date + 4 days). Real integrations should write the carrier's delivery date into `delivered_date`.
+- **Seeded delivery dates are estimates.** The starter's seed data only has `estimated_delivery` (order date + 5 days), which is used as the delivery basis. Real integrations should write the carrier's delivery date into `delivered_date`.
 - **Node.js version.** AgentCore CLI 0.30.0 runs on Node 20 but warns that Node 22+ will be required for updates after January 2027.
 
 ---

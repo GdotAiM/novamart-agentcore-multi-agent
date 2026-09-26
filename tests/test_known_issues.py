@@ -99,7 +99,8 @@ def test_seed_verdicts_unchanged():
     assert verdict['ORD-27176'] and verdict['ORD-28002'] and verdict['ORD-29001'] and verdict['ORD-30001']
     assert not verdict['ORD-27180'] and not verdict['ORD-28001'] and not verdict['ORD-29002']
     assert not verdict['ORD-29003'] and not verdict['ORD-28003']
-    assert all('delivered_date' in o for o in seed_data.generate_orders() if o['status'] == 'delivered')
+    # seed_data.py is kept identical to the starter, so seeded orders carry no
+    # delivered_date; eligibility falls back to estimated_delivery.
 
 
 # ── Fix 5: only the customer-facing reply is returned ────────────────────────

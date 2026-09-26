@@ -114,7 +114,6 @@ Resources:
       MetadataConfiguration:
         NonFilterableMetadataKeys:
           - AMAZON_BEDROCK_TEXT
-          - AMAZON_BEDROCK_METADATA
 
   ShippingVectorIndex:
     Type: AWS::S3Vectors::Index
@@ -127,7 +126,6 @@ Resources:
       MetadataConfiguration:
         NonFilterableMetadataKeys:
           - AMAZON_BEDROCK_TEXT
-          - AMAZON_BEDROCK_METADATA
 
   WarrantyVectorIndex:
     Type: AWS::S3Vectors::Index
@@ -140,7 +138,6 @@ Resources:
       MetadataConfiguration:
         NonFilterableMetadataKeys:
           - AMAZON_BEDROCK_TEXT
-          - AMAZON_BEDROCK_METADATA
 
   # ─────────────────────────────────────────────
   # IAM - Role for AgentCore

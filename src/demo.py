@@ -47,8 +47,6 @@ print(f"Query    : {QUERY}\n")
 #   "Tool #N: name"  ->  [TOOL CALL]  name
 #   all other text   ->  | <text>      (agent reasoning)
 
-import time
-t0 = time.time()
 trace.new_turn()
 sys.stdout = _trace_writer
 try:
@@ -59,7 +57,8 @@ finally:
 
 # ── Print workflow summary and final response ─────────────────────────────────
 
-trace.summary(session_id, elapsed=time.time() - t0)
+import time
+trace.summary(session_id, elapsed=0)
 
 state       = _read_workflow_state(session_id) or {}
 comm_result = state.get('communication_agent', '')

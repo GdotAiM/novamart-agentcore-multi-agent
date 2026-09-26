@@ -20,12 +20,6 @@ import os
 import sys
 from datetime import datetime, timedelta
 
-try:                                   # honour .env like config.py does
-    from dotenv import load_dotenv
-    load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
-except ImportError:
-    pass
-
 AWS_REGION   = os.environ.get('AWS_REGION', 'us-east-1')
 PROJECT_NAME = os.environ.get('PROJECT_NAME', 'udacity-agentcore')
 
@@ -102,11 +96,6 @@ CUSTOMERS = [
 #                                       ORD-28002 is 8 days old  -> eligible
 #   CUST-003 (Premium): ORD-29001 is 40 days old -> eligible only because Premium
 #   CUST-004 (Standard): ORD-30001 is 20 days old -> eligible
-#
-# Delivered orders also get a `delivered_date` (DELIVERY_DAYS after the order).
-# Return windows are counted from delivery, as the returns policy states; the
-# verdicts above are unchanged (e.g. ORD-27176 delivered 8 days ago).
-DELIVERY_DAYS = 4
 ORDERS = [
     ("CUST-001", "ORD-27176", "Wireless Headphones Pro",  "Electronics",  149.99, 1, "delivered",   12),
     ("CUST-001", "ORD-27177", "Smart Watch Series 5",     "Electronics",  299.99, 1, "shipped",      3),
@@ -139,8 +128,6 @@ def generate_orders():
             "estimated_delivery": (order_date + timedelta(days=5)).strftime("%Y-%m-%d"),
             "tracking_number":    f"TRK{100000100 + i * 7919}",
         })
-        if status == "delivered":
-            orders[-1]["delivered_date"] = (order_date + timedelta(days=DELIVERY_DAYS)).strftime("%Y-%m-%d")
     return orders
 
 # ─────────────────────────────────────────────
@@ -333,7 +320,7 @@ def seed_orders():
     print(f"  ✓ Inserted {len(orders)} orders")
     for o in orders:
         print(f"    {o['customer_id']}  {o['order_id']}  {o['status']:<12} "
-              f"{o['order_date']}  {o.get('delivered_date', '-'):<10}  {o['product_name']}")
+              f"{o['order_date']}  {o['product_name']}")
 
 
 def upload_policy_documents(bucket: str):
