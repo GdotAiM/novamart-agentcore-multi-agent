@@ -264,7 +264,7 @@ python src/agent_orchestrator.py invoke "What was my return reference again?" CU
 pip install pytest moto && pytest -q tests/test_known_issues.py
 ```
 
-For the course submission, also take a screenshot of the **X-Ray Service Map** (CloudWatch → X-Ray traces → Service map) after a live run. Allow about 10 minutes for the first spans to be indexed.
+The X-Ray Service Map for the course submission is in CloudWatch → X-Ray traces → Service map (see [Observability (X-Ray)](#observability-x-ray)). After the first live run, allow about 10 minutes for spans to be indexed.
 
 ---
 
@@ -336,6 +336,16 @@ AgentCore Memory holds both turns (USER + ASSISTANT events for actor `CUST-004`,
 ![Memory events](docs/screenshots/19-memory-events.png)
 *`list_events` on the AgentCore Memory, plus the order and WorkflowState records for the session.*
 
+### Observability (X-Ray)
+
+Screenshots taken live in the CloudWatch X-Ray console (us-east-1, 1-hour range) after the round-2 runs:
+
+![X-Ray trace map](docs/screenshots/22-xray-service-map.png)
+*Trace Map: **Client** → **NovaMart-Orchestrator**, fanning out to **InventoryAgent**, **RefundAgent**, **PolicyAgent** and **CommunicationAgent**, and to the three Knowledge Base nodes **KnowledgeBase:returns**, **KnowledgeBase:shipping** and **KnowledgeBase:warranty**.*
+
+![X-Ray traces](docs/screenshots/23-xray-traces.png)
+*Traces list for `NovaMart-Orchestrator`: **8 traces, all OK**, average response time **27.73 s** (17:13–17:23 SAST). These are the round-2 local `test` scenarios and deployed `invoke` calls.*
+
 ### Local runs
 
 - **Round 1:**
@@ -382,6 +392,8 @@ AgentCore Memory holds both turns (USER + ASSISTANT events for actor `CUST-004`,
 | 19 | AgentCore Memory events + state | [19-memory-events.png](docs/screenshots/19-memory-events.png) |
 | 20 | `pytest tests/test_known_issues.py`: 17 passed | [20-unit-tests.png](docs/screenshots/20-unit-tests.png) |
 | 21 | X-Ray `Default` indexing rule (100%) | [21-xray-indexing.png](docs/screenshots/21-xray-indexing.png) |
+| 22 | X-Ray console: Trace/Service Map (1 h) | [22-xray-service-map.png](docs/screenshots/22-xray-service-map.png) |
+| 23 | X-Ray console: NovaMart-Orchestrator traces (8, all OK) | [23-xray-traces.png](docs/screenshots/23-xray-traces.png) |
 
 ![01 stack](docs/screenshots/01-stack.png)
 ![20 unit tests](docs/screenshots/20-unit-tests.png)
