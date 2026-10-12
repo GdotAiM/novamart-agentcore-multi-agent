@@ -1220,7 +1220,7 @@ def build_orchestrator_agent(
         trace.step_done("communication_agent", old_version)
         return text
 
-    return Agent(
+    orchestrator = Agent(
         model=model,
         system_prompt=system_prompt,
         tools=[
@@ -1231,6 +1231,20 @@ def build_orchestrator_agent(
             route_to_communication_agent,
         ],
     )
+    # Used by _customer_reply(): if the LLM skipped the mandatory final step, the
+    # Communication Agent is still run so the orchestrator never writes the reply.
+    orchestrator.finalize = route_to_communication_agent
+    return orchestrator
+
+
+def _customer_reply(orchestrator, session_id: str, customer_id: str, request: str) -> str:
+    """Final customer text - always the Communication Agent's output, never the orchestrator's."""
+    state = _read_workflow_state(session_id) or {}
+    text = state.get('communication_agent', '')
+    if not text and hasattr(orchestrator, 'finalize'):
+        text = orchestrator.finalize(session_id=session_id, customer_id=customer_id,
+                                     original_request=request)
+    return _final_customer_text(text or '')
 
 
 # ═══════════════════════════════════════════════════════
@@ -1956,8 +1970,7 @@ def run_test_scenarios() -> None:
         orchestrator.messages.clear()
         with tracer.trace_request(session_id, customer_id, query):
             response = orchestrator(prompt)
-        state = _read_workflow_state(session_id) or {}
-        text = _final_customer_text(state.get('communication_agent', '') or str(response))
+        text = _customer_reply(orchestrator, session_id, customer_id, query)
         _finish_turn(session_id, customer_id, query, text)
         print(f"\nResponse: {text}")
         print_trace_hint()
@@ -2039,9 +2052,8 @@ def run_chat() -> None:
         elapsed = time.time() - t0_turn
 
         # ── Resolve the final customer-facing text ────────────────────
+        text = _customer_reply(orchestrator, session_id, customer_id, user_input)
         final_state = _read_workflow_state(session_id) or {}
-        comm_result = final_state.get('communication_agent', '')
-        text = _final_customer_text(comm_result or str(response))
         _finish_turn(session_id, customer_id, user_input, text)
 
         # ── DynamoDB workflow state summary ───────────────────────────
@@ -2136,8 +2148,8 @@ def run_serve() -> None:
             orchestrator.messages.clear()
             with tracer.trace_request(session_id, customer_id, prompt):
                 response = orchestrator(enriched)
+            text  = _customer_reply(orchestrator, session_id, customer_id, prompt)
             state = _read_workflow_state(session_id) or {}
-            text  = _final_customer_text(state.get('communication_agent', '') or str(response))
             remembered = _finish_turn(session_id, customer_id, prompt, text)
         flush_logs()
         return {'result': text, 'session_id': session_id, 'customer_id': customer_id,

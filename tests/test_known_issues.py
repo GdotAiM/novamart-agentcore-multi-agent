@@ -266,3 +266,15 @@ def test_memory_errors_degrade(monkeypatch):
     monkeypatch.setenv('AGENTCORE_MEMORY_ID', 'mem-123')
     assert ao._load_memory_context('s1', 'CUST-001') == ''
     assert ao._save_memory_turn('s1', 'CUST-001', 'q', 'a') is False
+
+
+def test_reply_always_from_communication_agent():
+    """If the orchestrator skips route_to_communication_agent, its own text is never used."""
+    class FakeOrch:
+        def __init__(self): self.calls = []
+        def finalize(self, **kw):
+            self.calls.append(kw); return "Communication reply"
+    o = FakeOrch()
+    sid = 'ut-' + uuid.uuid4().hex[:6]
+    assert ao._customer_reply(o, sid, 'CUST-001', 'hi') == 'Communication reply'
+    assert o.calls and o.calls[0]['original_request'] == 'hi'

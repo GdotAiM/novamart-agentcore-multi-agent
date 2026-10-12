@@ -38,3 +38,118 @@ These fixes address the issues found in the first live run. The source changes a
 | 15 | **The return invoke didn't call `initiate_refund`** | The RefundAgent prompt now says to call `initiate_refund` immediately for an eligible, explicit return request, using the customer's reason or `Customer requested return (no reason given)`, and never to ask for a reason first. A question like "Can I return…?" still only reports eligibility. There is also a deterministic backstop in `route_to_refund_agent`: if the tools reported `eligible: true`, the request is an explicit return instruction (`_explicit_return_intent`), and no refund succeeded, the same `initiate_refund` logic runs in code. The grading suite has no test that expects the agent to ask for a reason. |
 | 16 | **The maths reply leaked reasoning text** | The CommunicationAgent prompt has a strict output-format section (start with the greeting; no commentary, `Subject:` line or `---`). `_final_customer_text()` also removes narration blocks and paragraphs (such as "workflow", "Let me compose…" or "final response") before and after separators, as well as a leading `Subject:` line. It runs on the CommunicationAgent output before it is stored, and again at every entry point (`test`, `chat`, `serve`). |
 | 17 | **Account X-Ray indexing forced to 100%** | **Not changed, on purpose.** Task 6 of `tests/test_agent.py` (`test_6_2_xray_tracing_enabled`, 10 points) requires the account's `Default` indexing rule to be exactly 100% and `AGENT_TRACE_SAMPLING_RATE=1.0`. The value is set by `enable_transaction_search()` in the pre-written `src/agent_observability.py`. Lowering it, or making it opt-in, would fail the graded check, so it stays at 100% and the README explains how to lower it after grading. |
+
+---
+
+# Round 3: review fixes (12 Oct 2026)
+
+| # | Issue | Fix |
+|---|---|---|
+| 18 | The CLI/serve entry points fell back to the orchestrator's own text (`str(response)`) when the Communication Agent's output was missing from WorkflowState, so in that edge case the orchestrator could write the customer reply. | New `_customer_reply()` in `src/agent_orchestrator.py`: the reply is always the Communication Agent's output. If the LLM skipped the mandatory final `route_to_communication_agent` call, that same tool is run deterministically (via `orchestrator.finalize`), with its normal `expected_version` state update. New test `test_reply_always_from_communication_agent` (18/18 pass). |
+| 19 | `.env` (resource IDs only, no credentials) was tracked despite `.gitignore`. | Removed from tracking; `.env.example` keeps placeholders. |
+
+---
+
+## Detailed end-to-end results (round 1 and round 2)
+
+Everything below comes from real runs on 26 Sep 2026 in `us-east-1`. The screenshots are terminal captures of those runs' logs, with credentials scrubbed. The account ID and resource IDs are visible; they are not secrets.
+
+There were two rounds:
+
+- **Round 1:** the first deployment, which produced the original "Known issues".
+- **Round 2:** the known-issue fixes, followed by a re-deploy and re-verification. Unless marked otherwise, the results below are from round 2.
+
+### Deployed resources
+
+| Resource | Value |
+|---|---|
+| Foundation stack | `udacity-agentcore` (CREATE_COMPLETE) |
+| Knowledge Bases | returns `PD8S9AR9AT`, shipping `JH2SOUPQEE`, warranty `8G7AOXWUTD`. Each sync: 2 documents scanned, 2 indexed, 0 failed. |
+| Guardrail | `i8p6i1mpnel9`, version `1` |
+| AgentCore Runtime | `udacity_agentcore_runtime-ETnTL1HEGn`: READY (PUBLIC / HTTP), updated in place by the round-2 deploy |
+| AgentCore Memory | `udacity_agentcore_memory-Q347dYFGUi`: ACTIVE, now **used** by the agents (`AGENTCORE_MEMORY_ID` in the runtime environment) |
+| CLI / CDK stack | `AgentCore-udacity-default` |
+| Observability | Log group `/aws/bedrock/agentcore/udacity-agentcore`; X-Ray → CloudWatch Logs (Transaction Search ACTIVE, 100% indexing) |
+
+### Grading suite: 120 / 120 (after the fixes)
+
+| Task | Area | Score |
+|---|---|---|
+| Task 2 | Multi-agent orchestration | **40 / 40** |
+| Task 3 | AgentCore Runtime + Guardrails | **20 / 20** |
+| Task 4 | Memory | **15 / 15** |
+| Task 5 | Bedrock Knowledge Bases | **25 / 25** |
+| Task 6 | Observability | **20 / 20** |
+| **Total** | `python tests/test_agent.py all` | **120 / 120 (100%)** |
+
+No checks failed, in either round. The offline tests for the fixes, `tests/test_known_issues.py`, pass 17/17.
+
+![Final score 120/120](screenshots/11-test-all-p2.png)
+*`tests/test_agent.py all` after the round-2 re-deploy: **Score: 120/120 pts (100%)**.*
+
+**Re-run with the starter's files restored (26 Sep 2026, 21:09 SAST).** After `starter_stack.yaml`, `seed_data.py` and `demo.py` were reverted to the exact starter versions and the data was reseeded with the original `seed_data.py`, the full suite was run again against the live deployment: **120/120, no failures**. Terminal screenshots are below, and the full text output is in [docs/test-all-output.txt](test-all-output.txt).
+
+![Terminal: 120/120 after restoring the starter files](screenshots/24-test-all-terminal.png)
+*Live terminal: Task 5 and Task 6 checks and **Score: 120/120 pts (100%)**.* Earlier tasks: [25-test-all-terminal-top.png](screenshots/25-test-all-terminal-top.png).
+
+### Deployed runtime: the three demo scenarios (`invoke`)
+
+| Scenario | Outcome (round 2) |
+|---|---|
+| **Return:** "I want to return my wireless headphones from order ORD-27176" (CUST-001, Premium) | **The return was created.** Alice received a confirmation with return reference `RET-27176-36065`, the $149.99 refund, packing and label instructions, and the note that her order was delivered on 18 Sep 2026, within the Premium 60-day window counted *from delivery*. DynamoDB confirms `status = Return Initiated`, `return_reason = "Customer requested return (no reason given)"`. In round 1 the model asked for a reason and created nothing. |
+| **Policy:** "What is the return policy for premium customers?" (CUST-002) | A grounded answer from the three Knowledge Bases: a 60-day Premium window versus 30 days Standard, the qualification criteria ($500+ per year or 20+ orders), the 6-step return process and Premium benefits (free expedited shipping, 3-year electronics warranty, 4-hour priority support). |
+| **Maths:** "How much would 5 items at $29.99 be with a 10% discount?" (CUST-003) | $149.95 minus $14.995 gives **$134.96**, routed straight to Communication. **The reply now starts with "Hello!"**, with no leaked reasoning. In round 1 it began "I can see that this is a pricing calculation question…". |
+
+| Return | Policy | Maths |
+|---|---|---|
+| ![Invoke - return](screenshots/12-invoke-return.png) | ![Invoke - policy](screenshots/13-invoke-policy.png) | ![Invoke - maths](screenshots/14-invoke-math.png) |
+
+![DynamoDB after the return invoke](screenshots/16-return-dynamodb.png)
+*The order record after the return invoke: `Return Initiated`, with return reference `RET-27176-36065`. (This capture predates restoring `seed_data.py` to the starter version, so it still shows a `delivered_date` field.)*
+
+### Multi-turn session with AgentCore Memory
+
+Two `invoke` calls sharing `--session-id demo172232` (CUST-004):
+
+1. **Turn 1:** "I want to return my phone case from order ORD-30001 - it's the wrong colour". The return was created with reference `RET-30001-36178`, and the customer's own reason (`Wrong colour`) was stored.
+2. **Turn 2:** "Sorry, what was my return reference again, and which item was it for?" This message contains **no order ID**. The answer was: "Your return reference is **RET-30001-36178**, and it's for the **Phone Case Slim** from order ORD-30001."
+
+AgentCore Memory holds both turns (USER + ASSISTANT events for actor `CUST-004`, session `demo172232`). The WorkflowState row shows `turn=2`, with 966 characters of memory context loaded for the second turn.
+
+| Turn 1 | Turn 2 |
+|---|---|
+| ![Session turn 1](screenshots/17-session-turn1.png) | ![Session turn 2](screenshots/18-session-turn2.png) |
+
+![Memory events](screenshots/19-memory-events.png)
+*`list_events` on the AgentCore Memory, plus the order and WorkflowState records for the session.*
+
+### Observability (X-Ray)
+
+Screenshots taken live in the CloudWatch X-Ray console (us-east-1, 1-hour range) after the round-2 runs:
+
+![X-Ray trace map](screenshots/22-xray-service-map.png)
+*Trace Map: **Client** → **NovaMart-Orchestrator**, fanning out to **InventoryAgent**, **RefundAgent**, **PolicyAgent** and **CommunicationAgent**, and to the three Knowledge Base nodes **KnowledgeBase:returns**, **KnowledgeBase:shipping** and **KnowledgeBase:warranty**.*
+
+![X-Ray traces](screenshots/23-xray-traces.png)
+*Traces list for `NovaMart-Orchestrator`: **8 traces, all OK**, average response time **27.73 s** (17:13–17:23 SAST). These are the round-2 local `test` scenarios and deployed `invoke` calls.*
+
+### Local runs
+
+- **Round 1:**
+  - `demo.py` routed Orchestrator → Inventory → Refund → Communication in **25.7 s**.
+  - `agent_orchestrator.py test` routed all 3 scenarios as specified: Inventory → Refund for the return, 3 parallel KB retrievers for the policy question, and straight to Communication for the maths.
+  - The Task 5 retrievers answered in parallel in 7.1 s.
+- **Round 2:** `agent_orchestrator.py test` routed all 3 scenarios correctly again. The return called `initiate_refund` (`RET-27176-35607`), and the maths reply was clean.
+- **Offline:** the mocked harness (moto plus a scripted model) ran every mode (`test`, `demo`, `chat`, `serve`, `deploy`, `invoke`) end to end, and pytest passed 17/17.
+
+### Deployment
+
+![Deploy pipeline](screenshots/10-deploy.png)
+*Round-2 `deploy`: the runtime was updated in place, and Step 4 now adds `AGENTCORE_MEMORY_ID` to the runtime environment.*
+
+![agentcore status](screenshots/15-agentcore-status.png)
+*`agentcore status`: runtime deployed and READY.*
+
+![Knowledge Base sync](screenshots/04-kb-sync.png)
+*Round 1: the three Knowledge Bases were created through the API and synced (ingestion COMPLETE, 0 failures).*
+
