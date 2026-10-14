@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NovaMart Support</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><h1>NovaMart Support</h1><div id="who"></div><button id="logout" hidden>Sign out</button></header>
+<main>
+  <section id="login-view">
+    <h2>Customer sign-in</h2>
+    <form id="login-form">
+      <label>Username <input id="username" autocomplete="username" required></label>
+      <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="error"></p>
+    </form>
+    <p class="hint">Signed in with Amazon Cognito. Your customer account is taken from your login, not typed in.</p>
+  </section>
+  <section id="chat-view" hidden>
+    <div id="meta"></div>
+    <div id="messages" aria-live="polite"></div>
+    <form id="chat-form">
+      <input id="prompt" placeholder="Ask about an order, a return, shipping or warranty..." autocomplete="off" required>
+      <button type="submit" id="send">Send</button>
+    </form>
+    <button id="new-session" class="link">Start a new conversation</button>
+  </section>
+</main>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

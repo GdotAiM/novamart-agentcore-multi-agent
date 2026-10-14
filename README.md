@@ -144,7 +144,10 @@ The orchestrator follows six routing rules:
 │   ├── create_agent_sessions_table.py # Extra (b): agent-sessions table + runtime IAM policy
 │   ├── session_store_demo.py      # Extra (b): same session id recalls earlier messages
 │   ├── cloudwatch_dashboard.py    # Extra (c): dashboard + PNG export
-│   └── generate_traffic.py        # Extra (c): traffic for the dashboard
+│   ├── generate_traffic.py        # Extra (c): traffic for the dashboard
+│   ├── create_cognito_frontend.py # Extra (d): Cognito pool/users + proxy Lambda URL + frontend config
+│   └── frontend_e2e_check.py      # Extra (d): headless sign-in + 2-turn chat check
+├── frontend/                      # Extra (d): static HTML/JS chat UI + proxy/handler.py (Lambda)
 ├── tests/
 │   ├── test_agent.py              # Automated grading suite (120 points, unchanged)
 │   ├── test_known_issues.py       # Offline pytest suite for the known-issue fixes (moto)
@@ -352,6 +355,49 @@ AWS does not publish per-agent metrics. The orchestrator emits them itself: `_ti
 
 ---
 
+### d) Cognito customer sign-in + web frontend (extra #4)
+
+```
+Browser (frontend/, http://localhost:8765)
+  │ 1. InitiateAuth (USER_PASSWORD_AUTH) ──► Amazon Cognito user pool `novamart-customers`
+  │ 2. POST {prompt, session_id} + Bearer access token
+  ▼
+Lambda function URL `novamart-frontend-proxy` (frontend/proxy/handler.py)
+  │ 3. cognito-idp GetUser(access token): Cognito validates the token and returns custom:customer_id
+  │ 4. InvokeAgentRuntime (SigV4, role `novamart-frontend-proxy-role`, this runtime only)
+  ▼
+AgentCore Runtime `udacity_agentcore_runtime-YrMne456sa` (unchanged) → 5-agent graph
+```
+
+- **Why a proxy, not runtime JWT auth:** an AgentCore Runtime accepts either IAM (SigV4) or JWT inbound auth, not both. The grading suite and `invoke` use SigV4, so switching the runtime to a Cognito JWT authorizer would break them. The proxy leaves the runtime and the 120/120 suite untouched (re-run after this extra: 120/120).
+- **Why a Lambda function URL, not API Gateway:** a turn takes 15–40 s, which is over API Gateway's 29 s integration limit. The Lambda allows 120 s.
+- **Customer identity comes from the token**, never from the request body. Each user has the read-only attribute `custom:customer_id` (`alice` → CUST-001 Premium, `bob` → CUST-002 Standard). The browser's per-tab session id is hashed with the user's `sub`, so one user cannot continue another user's conversation.
+- **Frontend:** static HTML/JS, no build step. It calls Cognito's public API directly, so no SDK is needed. The session id is kept in `sessionStorage`, one conversation per tab, so multi-turn memory works. Requests with no token or a bad token get 401. CORS allows only `http://localhost:8765`.
+- **Lab constraints:** `cognito-idp:TagResource` and `AdminSetUserPassword` are denied in the lab. The pool is created without tags, and each test user's permanent password is set by answering the `NEW_PASSWORD_REQUIRED` challenge.
+
+Setup and run:
+
+```bash
+python scripts/create_cognito_frontend.py     # pool, app client, test users, proxy role + Lambda URL, frontend/config.js
+                                              # generated passwords -> frontend/.cognito-test-user (gitignored, 0600)
+cd frontend && python3 -m http.server 8765 --bind 127.0.0.1   # open http://localhost:8765
+python scripts/frontend_e2e_check.py alice    # headless check: sign-in, 401s, CORS, return + follow-up turn
+```
+
+Headless proof: [62-frontend-e2e](docs/screenshots/run-2026-10-14/62-frontend-e2e.png). Alice's return created `RET-27176-74960`; turn 2 in the same tab recalled it. Setup output: [63-cognito-setup](docs/screenshots/run-2026-10-14/63-cognito-setup.png).
+
+#### Browser screenshots
+
+<!-- placeholder: browser screenshots to be added -->
+| Step | Screenshot |
+|---|---|
+| Sign-in page | *(to be added)* |
+| Signed in as alice (CUST-001, Premium) | *(to be added)* |
+| Return request | *(to be added)* |
+| Follow-up turn (same tab) | *(to be added)* |
+
+---
+
 ## Known issues
 
 - X-Ray `Default` indexing is set to 100% account-wide because Task 6 checks it; lower it after grading (`aws xray update-indexing-rule --name Default --rule '{"Probabilistic":{"DesiredSamplingPercentage":1}}'`).
@@ -383,7 +429,7 @@ This deletes, in dependency order:
 
 > ⚠️ **Don't add `--disable-transaction-search` if anything else in the account uses AgentCore Observability or CloudWatch Transaction Search.** It turns Transaction Search off for the whole account, not just this project. The `CDKToolkit` bootstrap stack is shared and is left in place.
 
-**Extras: remove these first**, because CloudFormation cannot delete the role while it still has extra inline policies. Run `python scripts/create_agent_sessions_table.py --delete` (removes the table and the `NovaMartAgentSessionsAccess` policy), then delete the `NovaMart-MultiAgent` dashboard and the `NovaMartCustomMetrics` inline policy on `udacity-agentcore-agentcore-role`.
+**Frontend extra:** run `python scripts/create_cognito_frontend.py --delete` (removes the Lambda, the proxy role and the user pool). **Extras: remove these first**, because CloudFormation cannot delete the role while it still has extra inline policies. Run `python scripts/create_agent_sessions_table.py --delete` (removes the table and the `NovaMartAgentSessionsAccess` policy), then delete the `NovaMart-MultiAgent` dashboard and the `NovaMartCustomMetrics` inline policy on `udacity-agentcore-agentcore-role`.
 
 ---
 
