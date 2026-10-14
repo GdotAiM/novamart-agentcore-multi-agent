@@ -301,6 +301,184 @@ def _save_memory_turn(session_id: str, customer_id: str, user_text: str, assista
         return False
 
 
+# ═══════════════════════════════════════════════════════
+#  STAND-OUT EXTRA - Strands session storage in DynamoDB
+#
+#  Strands Agents (1.59) ships FileSessionManager and S3SessionManager but no
+#  DynamoDB session manager (there is no `DynamoDbSessionStorage` class). This is
+#  a custom strands.session.SessionRepository backed by the `<project>-agent-sessions`
+#  table (created by scripts/create_agent_sessions_table.py, not the starter stack),
+#  plugged into Strands' own RepositorySessionManager.
+#
+#  It complements AgentCore Memory: Memory gives per-customer summaries across
+#  sessions; this store keeps the exact Strands message history of one session
+#  (agent id "customer_conversation") so a follow-up with the same session id can
+#  recall earlier messages even when Memory is disabled. The orchestrator still
+#  never writes the reply: what is stored is the customer message and the
+#  Communication Agent's final text. Never raises into a request.
+# ═══════════════════════════════════════════════════════
+
+_SESSION_AGENT_ID = 'customer_conversation'
+
+
+def _sessions_table_name() -> str:
+    return os.environ.get('AGENT_SESSIONS_TABLE') or f"{config.PROJECT_NAME}-agent-sessions"
+
+
+def _sessions_enabled() -> bool:
+    return os.environ.get('AGENT_SESSIONS_ENABLED', 'true').strip().lower() not in ('0', 'false', 'no')
+
+
+try:
+    from strands.session import SessionRepository as _StrandsSessionRepository
+except Exception:                                       # pragma: no cover
+    _StrandsSessionRepository = object
+
+
+class DynamoDBSessionRepository(_StrandsSessionRepository):
+    """Strands SessionRepository storing sessions, agents and messages in one DynamoDB table.
+
+    Keys: pk = session_id, sk = 'SESSION' | 'AGENT#<agent_id>' |
+    'MSG#<agent_id>#<message_id:08d>' | 'MULTI#<id>'. Items hold the Strands
+    to_dict() payload as JSON in `data` (avoids DynamoDB float/bytes limits).
+    """
+
+    def __init__(self, table_name: str = None, resource=None, ttl_days: int = 30):
+        self.table = (resource or dynamodb).Table(table_name or _sessions_table_name())
+        self.ttl_days = ttl_days
+
+    def _put(self, pk, sk, data, must_not_exist=False):
+        item = {'pk': pk, 'sk': sk, 'data': json.dumps(data, default=str),
+                'ttl': int(time.time()) + self.ttl_days * 86400}
+        kw = {'ConditionExpression': 'attribute_not_exists(pk)'} if must_not_exist else {}
+        self.table.put_item(Item=item, **kw)
+
+    def _get(self, pk, sk):
+        item = self.table.get_item(Key={'pk': pk, 'sk': sk}).get('Item')
+        return json.loads(item['data']) if item else None
+
+    def create_session(self, session, **kwargs):
+        from strands.types.exceptions import SessionException
+        try:
+            self._put(session.session_id, 'SESSION', session.to_dict(), must_not_exist=True)
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                raise SessionException(f"Session {session.session_id} already exists") from e
+            raise
+        return session
+
+    def read_session(self, session_id, **kwargs):
+        from strands.types.session import Session
+        data = self._get(session_id, 'SESSION')
+        return Session.from_dict(data) if data else None
+
+    def create_agent(self, session_id, session_agent, **kwargs):
+        self._put(session_id, f"AGENT#{session_agent.agent_id}", session_agent.to_dict())
+
+    def read_agent(self, session_id, agent_id, **kwargs):
+        from strands.types.session import SessionAgent
+        data = self._get(session_id, f"AGENT#{agent_id}")
+        return SessionAgent.from_dict(data) if data else None
+
+    def update_agent(self, session_id, session_agent, **kwargs):
+        from strands.types.exceptions import SessionException
+        prev = self.read_agent(session_id, session_agent.agent_id)
+        if prev is None:
+            raise SessionException(f"Agent {session_agent.agent_id} does not exist")
+        session_agent.created_at = prev.created_at
+        self.create_agent(session_id, session_agent)
+
+    def create_message(self, session_id, agent_id, session_message, **kwargs):
+        self._put(session_id, f"MSG#{agent_id}#{session_message.message_id:08d}",
+                  session_message.to_dict())
+
+    def read_message(self, session_id, agent_id, message_id, **kwargs):
+        from strands.types.session import SessionMessage
+        data = self._get(session_id, f"MSG#{agent_id}#{message_id:08d}")
+        return SessionMessage.from_dict(data) if data else None
+
+    def update_message(self, session_id, agent_id, session_message, **kwargs):
+        from strands.types.exceptions import SessionException
+        prev = self.read_message(session_id, agent_id, session_message.message_id)
+        if prev is None:
+            raise SessionException(f"Message {session_message.message_id} does not exist")
+        session_message.created_at = prev.created_at
+        self.create_message(session_id, agent_id, session_message)
+
+    def list_messages(self, session_id, agent_id, limit=None, offset=0, **kwargs):
+        from strands.types.session import SessionMessage
+        items, kw = [], {'KeyConditionExpression': Key('pk').eq(session_id)
+                         & Key('sk').begins_with(f"MSG#{agent_id}#")}
+        while True:
+            resp = self.table.query(**kw)
+            items += resp.get('Items', [])
+            if 'LastEvaluatedKey' not in resp:
+                break
+            kw['ExclusiveStartKey'] = resp['LastEvaluatedKey']
+        items.sort(key=lambda i: i['sk'])
+        items = items[offset:] if limit is None else items[offset:offset + limit]
+        return [SessionMessage.from_dict(json.loads(i['data'])) for i in items]
+
+    def create_multi_agent(self, session_id, multi_agent, **kwargs):
+        self._put(session_id, f"MULTI#{multi_agent.id}", multi_agent.serialize_state())
+
+    def read_multi_agent(self, session_id, multi_agent_id, **kwargs):
+        return self._get(session_id, f"MULTI#{multi_agent_id}")
+
+    def update_multi_agent(self, session_id, multi_agent, **kwargs):
+        self.create_multi_agent(session_id, multi_agent)
+
+
+def _conversation_agent(session_id: str, repository=None) -> Agent:
+    """A never-invoked Strands Agent whose message history is persisted by
+    RepositorySessionManager(DynamoDBSessionRepository). Constructing it restores
+    the session's earlier messages from DynamoDB."""
+    from strands.session import RepositorySessionManager
+    manager = RepositorySessionManager(
+        session_id=session_id, session_repository=repository or DynamoDBSessionRepository())
+    agent = Agent(agent_id=_SESSION_AGENT_ID, name='SessionTranscript',
+                  model=BedrockModel(model_id=config.WORKER_MODEL_ID, region_name=config.AWS_REGION),
+                  session_manager=manager, callback_handler=None)
+    agent._nm_session_manager = manager
+    return agent
+
+
+def _load_session_history(session_id: str, max_turns: int = _MEMORY_MAX_TURNS) -> str:
+    """Earlier messages of this session from the Strands DynamoDB session store ('' if none)."""
+    if not _sessions_enabled():
+        return ''
+    try:
+        agent = _conversation_agent(session_id)
+        lines = []
+        for msg in agent.messages[-max_turns * 2:]:
+            text = ' '.join(c.get('text', '') for c in msg.get('content', []) if 'text' in c).strip()
+            if text:
+                lines.append(f"{'Customer' if msg['role'] == 'user' else 'NovaMart'}: {text[:1200]}")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning(f"Strands DynamoDB session load failed: {e}")
+        return ''
+
+
+def _save_session_turn(session_id: str, user_text: str, assistant_text: str) -> bool:
+    """Append the customer message + final Communication Agent reply to the Strands session."""
+    if not _sessions_enabled():
+        return False
+    try:
+        agent = _conversation_agent(session_id)
+        manager = agent._nm_session_manager
+        for role, text in (('user', user_text), ('assistant', assistant_text)):
+            if text:
+                msg = {'role': role, 'content': [{'text': text[:8000]}]}
+                agent.messages.append(msg)
+                manager.append_message(msg, agent)
+        manager.sync_agent(agent)
+        return True
+    except Exception as e:
+        logger.warning(f"Strands DynamoDB session save failed: {e}")
+        return False
+
+
 def _begin_turn(session_id: str, customer_id: str, request: str, memory_context: str = '') -> dict:
     """
     Start a new turn in WorkflowState: create the row for a new session, or for
@@ -330,6 +508,11 @@ def _begin_turn(session_id: str, customer_id: str, request: str, memory_context:
 def _prepare_turn(session_id: str, customer_id: str, request: str) -> str:
     """Load memory, start the WorkflowState turn, return the orchestrator prompt."""
     context = _load_memory_context(session_id, customer_id)
+    if 'Earlier turns in this conversation' not in context:
+        history = _load_session_history(session_id)     # Strands DynamoDB session store
+        if history:
+            context = (context + "\n\n" if context else '') + \
+                "Earlier turns in this conversation (session store):\n" + history
     try:
         _begin_turn(session_id, customer_id, request, context)
     except Exception as e:
@@ -342,7 +525,8 @@ def _prepare_turn(session_id: str, customer_id: str, request: str) -> str:
 
 
 def _finish_turn(session_id: str, customer_id: str, request: str, response_text: str) -> bool:
-    """Persist the finished turn to AgentCore Memory (no-op without memory)."""
+    """Persist the finished turn to the Strands DynamoDB session store and AgentCore Memory."""
+    _save_session_turn(session_id, request, response_text)
     return _save_memory_turn(session_id, customer_id, request, response_text)
 
 
