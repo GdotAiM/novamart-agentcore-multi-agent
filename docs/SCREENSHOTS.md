@@ -1,6 +1,59 @@
 # Screenshot gallery
 
-All captures from the live runs (us-east-1, 26 Sep 2026). Credentials scrubbed; account and resource IDs are not secrets. Back to [README](../README.md).
+Captures from the live runs (us-east-1). Credentials scrubbed; account and resource IDs are not secrets. Back to [README](../README.md).
+
+## Current deployment: account 015713577121, 14 Oct 2026
+
+KBs created in the AWS console:
+
+| File |
+|---|
+| [kb-list.png](screenshots/kb-console2/kb-list.png) |
+| [returns-review.png](screenshots/kb-console2/returns-review.png) |
+| [returns-synced.png](screenshots/kb-console2/returns-synced.png) |
+| [shipping-review.png](screenshots/kb-console2/shipping-review.png) |
+| [shipping-synced.png](screenshots/kb-console2/shipping-synced.png) |
+| [warranty-review.png](screenshots/kb-console2/warranty-review.png) |
+| [warranty-synced.png](screenshots/kb-console2/warranty-synced.png) |
+
+Terminal captures (deploy, 120/120, runtime invocations, extras a-c):
+
+| File |
+|---|
+| [30-deploy-p1.png](screenshots/run-2026-10-14/30-deploy-p1.png) |
+| [30-deploy-p2.png](screenshots/run-2026-10-14/30-deploy-p2.png) |
+| [31-test-task5-p1.png](screenshots/run-2026-10-14/31-test-task5-p1.png) |
+| [31-test-task5-p2.png](screenshots/run-2026-10-14/31-test-task5-p2.png) |
+| [32-test-all-p1.png](screenshots/run-2026-10-14/32-test-all-p1.png) |
+| [32-test-all-p2.png](screenshots/run-2026-10-14/32-test-all-p2.png) |
+| [33-agentcore-status.png](screenshots/run-2026-10-14/33-agentcore-status.png) |
+| [40-adversarial-applyguardrail.png](screenshots/run-2026-10-14/40-adversarial-applyguardrail.png) |
+| [41-session-store-turn1.png](screenshots/run-2026-10-14/41-session-store-turn1.png) |
+| [42-session-store-recall.png](screenshots/run-2026-10-14/42-session-store-recall.png) |
+| [43-test-all-after-session-store-p1.png](screenshots/run-2026-10-14/43-test-all-after-session-store-p1.png) |
+| [43-test-all-after-session-store-p2.png](screenshots/run-2026-10-14/43-test-all-after-session-store-p2.png) |
+| [44-offline-tests.png](screenshots/run-2026-10-14/44-offline-tests.png) |
+| [45-adversarial-blocked.png](screenshots/run-2026-10-14/45-adversarial-blocked.png) |
+| [46-adversarial-allowed.png](screenshots/run-2026-10-14/46-adversarial-allowed.png) |
+| [47-runtime-invoke-return.png](screenshots/run-2026-10-14/47-runtime-invoke-return.png) |
+| [48-runtime-invoke-policy.png](screenshots/run-2026-10-14/48-runtime-invoke-policy.png) |
+| [49-runtime-invoke-math.png](screenshots/run-2026-10-14/49-runtime-invoke-math.png) |
+| [50-session-turn1.png](screenshots/run-2026-10-14/50-session-turn1.png) |
+| [51-session-turn2.png](screenshots/run-2026-10-14/51-session-turn2.png) |
+| [52-session-ddb.png](screenshots/run-2026-10-14/52-session-ddb.png) |
+| [53-local-test-p1.png](screenshots/run-2026-10-14/53-local-test-p1.png) |
+| [53-local-test-p2.png](screenshots/run-2026-10-14/53-local-test-p2.png) |
+| [53-local-test-p3.png](screenshots/run-2026-10-14/53-local-test-p3.png) |
+| [53-local-test-p4.png](screenshots/run-2026-10-14/53-local-test-p4.png) |
+| [53-local-test-p5.png](screenshots/run-2026-10-14/53-local-test-p5.png) |
+| [53-local-test-p6.png](screenshots/run-2026-10-14/53-local-test-p6.png) |
+| [54-test-all-final-p1.png](screenshots/run-2026-10-14/54-test-all-final-p1.png) |
+| [54-test-all-final-p2.png](screenshots/run-2026-10-14/54-test-all-final-p2.png) |
+| [55-dashboard-script.png](screenshots/run-2026-10-14/55-dashboard-script.png) |
+| [dashboard/cloudwatch-dashboard.png](screenshots/dashboard/cloudwatch-dashboard.png) |
+
+## Earlier deployment (account 802732818729, 26 Sep 2026)
+
 
 | # | Step | Screenshot |
 |---|---|---|
