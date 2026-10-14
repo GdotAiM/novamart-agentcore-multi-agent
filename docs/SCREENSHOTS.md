@@ -50,6 +50,7 @@ Terminal captures (deploy, 120/120, runtime invocations, extras a-c):
 | [54-test-all-final-p1.png](screenshots/run-2026-10-14/54-test-all-final-p1.png) |
 | [54-test-all-final-p2.png](screenshots/run-2026-10-14/54-test-all-final-p2.png) |
 | [55-dashboard-script.png](screenshots/run-2026-10-14/55-dashboard-script.png) |
+| X-Ray trace map (cropped 2x / full) and traces list: [60-xray-trace-map.png](screenshots/run-2026-10-14/60-xray-trace-map.png) · [full](screenshots/run-2026-10-14/60-xray-trace-map-full.png) · [61-xray-traces.png](screenshots/run-2026-10-14/61-xray-traces.png) |
 | [dashboard/cloudwatch-dashboard.png](screenshots/dashboard/cloudwatch-dashboard.png) |
 
 ## Earlier deployment (account 802732818729, 26 Sep 2026)

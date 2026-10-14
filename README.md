@@ -11,7 +11,7 @@ Live deployment: account `015713577121`, us-east-1, 14 Oct 2026. Resource IDs be
 | Criterion | Where proven | Screenshot / file |
 |---|---|---|
 | Grading suite 120/120 | `python tests/test_agent.py all` against the live deployment (re-run after every extra) | [54-test-all-final](docs/screenshots/run-2026-10-14/54-test-all-final-p2.png) · [p1](docs/screenshots/run-2026-10-14/54-test-all-final-p1.png) · [first run](docs/screenshots/run-2026-10-14/32-test-all-p2.png) |
-| X-Ray service map | CloudWatch → X-Ray trace map: Orchestrator → 4 agents → 3 KBs. 30 NovaMart traces received in this deployment (Task 6 check) | [22-xray-service-map.png](docs/screenshots/22-xray-service-map.png) (*from the earlier deployment, account 802732818729; to be retaken*) · [53-local-test](docs/screenshots/run-2026-10-14/53-local-test-p6.png) |
+| X-Ray service map | CloudWatch → X-Ray trace map: Client → NovaMart-Orchestrator → 4 agents + 3 KBs, all healthy (window 11:55–12:24 UTC+2, 14 Oct 2026) | [60-xray-trace-map](docs/screenshots/run-2026-10-14/60-xray-trace-map.png) · [full](docs/screenshots/run-2026-10-14/60-xray-trace-map-full.png) · [61-xray-traces](docs/screenshots/run-2026-10-14/61-xray-traces.png) (33 traces, avg 17.9 s, all OK) |
 | Models & temperatures | [`config.py`](config.py) (`ORCHESTRATOR_MODEL_ID` Claude Haiku 4.5, `WORKER_MODEL_ID` Claude Sonnet 4.5); `build_*_agent()` in [`src/agent_orchestrator.py`](src/agent_orchestrator.py): orchestrator 0.0, retrievers 0.0, inventory 0.1, refund 0.1, policy coordinator 0.2, communication 0.3 | Task 2 40/40 in [54-test-all-final p1](docs/screenshots/run-2026-10-14/54-test-all-final-p1.png) |
 | Guardrail config + validation | `create_guardrail()` / `_apply_guardrail()`: Standard tier, cross-region profile `us.guardrail.v1:0`, content filters + DENY topics (competitor products, pricing negotiations, legal threats; arithmetic explicitly allowed). Guardrail **`okj496qvcjqc` v1** attached to all agents incl. retrievers | [45-adversarial-blocked](docs/screenshots/run-2026-10-14/45-adversarial-blocked.png) · [46-adversarial-allowed](docs/screenshots/run-2026-10-14/46-adversarial-allowed.png) · [49-runtime-invoke-math](docs/screenshots/run-2026-10-14/49-runtime-invoke-math.png) · [transcript](docs/adversarial/transcript.md) |
 | Runtime deploy | `deploy` via AgentCore CLI ([`src/agentcore_cli.py`](src/agentcore_cli.py), [`agentcore/agentcore.json`](agentcore/agentcore.json)); runtime **`udacity_agentcore_runtime-YrMne456sa`** READY | [30-deploy](docs/screenshots/run-2026-10-14/30-deploy-p2.png) · [33-agentcore-status](docs/screenshots/run-2026-10-14/33-agentcore-status.png) |
@@ -28,8 +28,8 @@ Code changes live in `src/agent_orchestrator.py`; everything else is additive (`
 ![Final score 120/120](docs/screenshots/run-2026-10-14/54-test-all-final-p2.png)
 *`python tests/test_agent.py all` against the live deployment after all extras: **Score: 120/120 pts (100%)**.*
 
-![X-Ray service map](docs/screenshots/22-xray-service-map.png)
-*X-Ray trace map: Client → NovaMart-Orchestrator → InventoryAgent, RefundAgent, PolicyAgent, CommunicationAgent and KnowledgeBase:returns / shipping / warranty. (Screenshot from the earlier deployment; the current deployment has published traces and the map will be retaken.)*
+![X-Ray trace map](docs/screenshots/run-2026-10-14/60-xray-trace-map.png)
+*X-Ray trace map of the current deployment: Client → NovaMart-Orchestrator → RefundAgent, PolicyAgent, InventoryAgent, CommunicationAgent and KnowledgeBase:returns / warranty / shipping. Full view: [60-xray-trace-map-full](docs/screenshots/run-2026-10-14/60-xray-trace-map-full.png); traces list: [61-xray-traces](docs/screenshots/run-2026-10-14/61-xray-traces.png).*
 
 ---
 
