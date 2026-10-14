@@ -98,3 +98,13 @@ def test_guarded_tags_only_customer_text():
 def test_untrusted_rules_in_prompts():
     assert 'untrusted DATA' in ao._UNTRUSTED_INPUT_RULES
     assert '<admin>' in ao._UNTRUSTED_INPUT_RULES
+
+
+def test_price_rounding_rule_half_up_on_exact_total():
+    q = ao._price_quote(29.99, 5, 10)
+    assert q['total'] == '$134.96' and q['exact_total'].startswith('134.955')
+    assert q['subtotal'] == '$149.95' and q['savings'] == '$14.99'
+    assert ao._price_quote('$19.99', 3, '15%')['total'] == '$50.97'      # 50.9745 -> 50.97
+    assert ao._price_quote(0.125, 1, 0)['total'] == '$0.13'               # half-up, not banker's
+    with pytest.raises(ValueError):
+        ao._price_quote(10, 1, 150)

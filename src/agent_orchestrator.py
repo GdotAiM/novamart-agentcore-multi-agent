@@ -1243,6 +1243,28 @@ def build_policy_agent() -> Agent:
 #  2.D - COMMUNICATION AGENT
 # ───────────────────────────────────────────────────────
 
+def _price_quote(unit_price, quantity=1, discount_percent=0) -> dict:
+    """Deterministic price maths. Rounding rule: compute the exact total
+    (unit_price x quantity x (1 - discount/100)) with Decimal and round ONCE,
+    half-up, to cents. Intermediate amounts (e.g. the discount) are never rounded
+    first, so 5 x $29.99 with 10% off = $134.955 -> $134.96."""
+    from decimal import Decimal, ROUND_HALF_UP
+    cents = Decimal('0.01')
+    unit = Decimal(str(unit_price).replace('$', '').replace(',', '').strip())
+    qty = Decimal(str(quantity))
+    pct = Decimal(str(discount_percent).replace('%', '').strip() or '0')
+    if unit < 0 or qty < 0 or not (0 <= pct <= 100):
+        raise ValueError('price, quantity and discount must be non-negative; discount <= 100')
+    subtotal = unit * qty
+    exact_total = subtotal * (Decimal(100) - pct) / Decimal(100)
+    total = exact_total.quantize(cents, rounding=ROUND_HALF_UP)
+    return {'subtotal': f"${subtotal.quantize(cents, rounding=ROUND_HALF_UP)}",
+            'discount_percent': f"{pct.normalize()}%",
+            'savings': f"${(subtotal.quantize(cents, rounding=ROUND_HALF_UP) - total)}",
+            'exact_total': str(exact_total), 'total': f"${total}",
+            'rounding': 'exact total rounded once, half-up, to cents'}
+
+
 def build_communication_agent() -> Agent:
     """
     Build the Communication Agent.
@@ -1267,6 +1289,9 @@ def build_communication_agent() -> Agent:
         "- Never invents information that is not present in the workflow state\n"
         "- Uses the conversation context (earlier turns) when the customer refers back to them\n"
         "Keep the tone helpful and human. Sign off as \"NovaMart Support\".\n\n"
+        "PRICE MATHS (strict): for any price, quantity or discount calculation, call calculate_price "
+        "and quote its subtotal, savings and total exactly. Never compute or round amounts yourself "
+        "(the rule is: exact total, rounded once half-up to cents - e.g. 5 x $29.99 with 10% off = $134.96).\n\n"
         "OUTPUT FORMAT (strict): your reply is sent to the customer verbatim. Output ONLY the message "
         "itself - start directly with the greeting. No preamble or commentary about the workflow, the "
         "context, other agents or what you are about to do (never write things like 'I can see...', "
@@ -1298,10 +1323,28 @@ def build_communication_agent() -> Agent:
             "version": int(state.get("version", 0)),
         }
 
+    @tool
+    def calculate_price(unit_price: float, quantity: int = 1, discount_percent: float = 0) -> dict:
+        """
+        Calculate a price total exactly (Decimal), rounding the final total once, half-up, to cents.
+
+        Args:
+            unit_price:       Price of one item in dollars (e.g. 29.99)
+            quantity:         Number of items
+            discount_percent: Percentage discount on the whole amount (e.g. 10 for 10%)
+
+        Returns:
+            subtotal, savings, total (formatted dollars) and the exact unrounded total
+        """
+        try:
+            return _price_quote(unit_price, quantity, discount_percent)
+        except Exception as e:
+            return {"error": str(e)}
+
     return Agent(
         model=model,
         system_prompt=system_prompt + _UNTRUSTED_INPUT_RULES,
-        tools=[get_full_workflow_context],
+        tools=[get_full_workflow_context, calculate_price],
     )
 
 
