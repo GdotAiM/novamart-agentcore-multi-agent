@@ -65,7 +65,7 @@ def outcome(action, hits):
     return 'block' if any('BLOCKED' in h for h in hits) else 'anonymize'
 
 
-from adversarial_checks import check_runtime, referenced_orders   # pure, unit-tested helpers
+from adversarial_checks import count_items, check_runtime, referenced_orders   # pure, unit-tested helpers
 
 
 def controlled_keys(prompts):
@@ -92,7 +92,7 @@ def order_snapshot(keys):
             r = ddb.batch_get_item(RequestItems=req)
             items += r['Responses'].get(config.ORDERS_TABLE, [])
             req = r.get('UnprocessedKeys') or None
-    count = ddb.meta.client.scan(TableName=config.ORDERS_TABLE, Select='COUNT', ConsistentRead=True)['Count']
+    count, _ = count_items(ddb.meta.client, config.ORDERS_TABLE)
     return {i['order_id']: i for i in items}, count
 
 

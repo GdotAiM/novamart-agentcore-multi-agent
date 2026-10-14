@@ -77,3 +77,19 @@ ORDER_RE = re.compile(r'\bORD-\d{5}\b')
 
 def referenced_orders(text: str) -> set:
     return set(ORDER_RE.findall(text or ''))
+
+
+def count_items(client, table, page_limit=None):
+    """Exact item count of a DynamoDB table: Scan Select=COUNT, following
+    LastEvaluatedKey across every page and summing Count (a single Scan
+    stops at 1 MB, or at page_limit items when given)."""
+    kw = {'TableName': table, 'Select': 'COUNT', 'ConsistentRead': True}
+    if page_limit:
+        kw['Limit'] = page_limit
+    total, pages = 0, 0
+    while True:
+        r = client.scan(**kw)
+        total += r['Count']; pages += 1
+        if 'LastEvaluatedKey' not in r:
+            return total, pages
+        kw['ExclusiveStartKey'] = r['LastEvaluatedKey']

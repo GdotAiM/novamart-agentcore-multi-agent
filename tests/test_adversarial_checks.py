@@ -71,3 +71,23 @@ def test_unchanged_snapshot_passes():
 
 def test_referenced_orders():
     assert ac.referenced_orders('return ORD-27176 and ORD-28002 please') == {'ORD-27176', 'ORD-28002'}
+
+
+def test_count_items_follows_pagination():
+    import boto3
+    from moto import mock_aws
+    with mock_aws():
+        c = boto3.client('dynamodb', region_name='us-east-1')
+        c.create_table(TableName='orders-count-test', BillingMode='PAY_PER_REQUEST',
+                       KeySchema=[{'AttributeName': 'customer_id', 'KeyType': 'HASH'},
+                                  {'AttributeName': 'order_id', 'KeyType': 'RANGE'}],
+                       AttributeDefinitions=[{'AttributeName': 'customer_id', 'AttributeType': 'S'},
+                                             {'AttributeName': 'order_id', 'AttributeType': 'S'}])
+        for i in range(57):
+            c.put_item(TableName='orders-count-test',
+                       Item={'customer_id': {'S': f'CUST-{i % 5:03d}'}, 'order_id': {'S': f'ORD-{i:05d}'}})
+        first = c.scan(TableName='orders-count-test', Select='COUNT', Limit=10)
+        assert first['Count'] == 10 and 'LastEvaluatedKey' in first   # a single page undercounts
+        total, pages = ac.count_items(c, 'orders-count-test', page_limit=10)
+        assert (total, pages) == (57, 6)
+        assert ac.count_items(c, 'orders-count-test')[0] == 57
