@@ -51,6 +51,7 @@ Terminal captures (deploy, 120/120, runtime invocations, extras a-c):
 | [54-test-all-final-p2.png](screenshots/run-2026-10-14/54-test-all-final-p2.png) |
 | [55-dashboard-script.png](screenshots/run-2026-10-14/55-dashboard-script.png) |
 | X-Ray trace map (cropped 2x / full) and traces list: [60-xray-trace-map.png](screenshots/run-2026-10-14/60-xray-trace-map.png) · [full](screenshots/run-2026-10-14/60-xray-trace-map-full.png) · [61-xray-traces.png](screenshots/run-2026-10-14/61-xray-traces.png) |
+| Frontend (extra d): [64-frontend-login.png](screenshots/run-2026-10-14/64-frontend-login.png) · [65-frontend-signed-in.png](screenshots/run-2026-10-14/65-frontend-signed-in.png) · [66-frontend-return.png](screenshots/run-2026-10-14/66-frontend-return.png) · [67-frontend-followup.png](screenshots/run-2026-10-14/67-frontend-followup.png) · headless [62-frontend-e2e.png](screenshots/run-2026-10-14/62-frontend-e2e.png) |
 | [dashboard/cloudwatch-dashboard.png](screenshots/dashboard/cloudwatch-dashboard.png) |
 
 ## Earlier deployment (account 802732818729, 26 Sep 2026)

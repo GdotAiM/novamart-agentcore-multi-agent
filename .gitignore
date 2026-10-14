@@ -62,3 +62,5 @@ credentials
 
 # Frontend extra: generated test credentials (never commit)
 frontend/.cognito-test-user
+.novamart-cognito-test-user
+.cognito-test-user*

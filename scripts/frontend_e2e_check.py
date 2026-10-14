@@ -1,6 +1,6 @@
 """Headless end-to-end check of extra #4 (same HTTP calls the browser makes).
 
-Signs in as a Cognito test user (password read from frontend/.cognito-test-user, never
+Signs in as a Cognito test user (password read from ../.novamart-cognito-test-user, never
 printed), sends a return request and a follow-up in one session via the proxy, and checks
 that requests without / with a bad token are rejected and that CORS preflight works.
 
@@ -9,7 +9,7 @@ that requests without / with a bad token are rejected and that CORS preflight wo
 import json, os, re, sys, time, urllib.request, urllib.error, uuid
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 cfg = json.loads(re.search(r'=\s*(\{.*\});', open(os.path.join(ROOT, 'frontend', 'config.js')).read(), re.S).group(1))
-users = json.load(open(os.path.join(ROOT, 'frontend', '.cognito-test-user')))
+users = json.load(open(os.environ.get('NOVAMART_TEST_USER_FILE') or os.path.join(os.path.dirname(ROOT), '.novamart-cognito-test-user')))
 user = sys.argv[1] if len(sys.argv) > 1 else 'alice'
 
 

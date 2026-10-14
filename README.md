@@ -379,7 +379,7 @@ Setup and run:
 
 ```bash
 python scripts/create_cognito_frontend.py     # pool, app client, test users, proxy role + Lambda URL, frontend/config.js
-                                              # generated passwords -> frontend/.cognito-test-user (gitignored, 0600)
+                                              # generated passwords -> ../.novamart-cognito-test-user (outside repo + served dir, 0600)
 cd frontend && python3 -m http.server 8765 --bind 127.0.0.1   # open http://localhost:8765
 python scripts/frontend_e2e_check.py alice    # headless check: sign-in, 401s, CORS, return + follow-up turn
 ```
@@ -388,9 +388,18 @@ Headless proof: [62-frontend-e2e](docs/screenshots/run-2026-10-14/62-frontend-e2
 
 #### Browser screenshots
 
-<!-- placeholder: browser screenshots to be added -->
+Agent replies are rendered as safe markdown: `md()` in `frontend/app.js` escapes all HTML first, then adds only bold, italics, lists and line breaks.
+
 | Step | Screenshot |
 |---|---|
+| Sign-in page (Cognito, password masked) | [64-frontend-login](docs/screenshots/run-2026-10-14/64-frontend-login.png) |
+| Signed in as alice: Alice Johnson · CUST-001 (Premium), from the token | [65-frontend-signed-in](docs/screenshots/run-2026-10-14/65-frontend-signed-in.png) |
+| Return request for ORD-27176 → `RET-27176-75285`, $149.99, Premium 60-day window | [66-frontend-return](docs/screenshots/run-2026-10-14/66-frontend-return.png) |
+| Follow-up in the same tab (turn 2) recalls `RET-27176-75285` | [67-frontend-followup](docs/screenshots/run-2026-10-14/67-frontend-followup.png) |
+
+![Frontend return](docs/screenshots/run-2026-10-14/66-frontend-return.png)
+
+---|---|
 | Sign-in page | *(to be added)* |
 | Signed in as alice (CUST-001, Premium) | *(to be added)* |
 | Return request | *(to be added)* |

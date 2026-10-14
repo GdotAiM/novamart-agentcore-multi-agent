@@ -23,8 +23,24 @@ function tabSession() {
   return s;
 }
 
+// Tiny safe markdown: escape ALL HTML first, then add only <strong>/<em>/<ul>/<ol>/<li>/<br>.
+function md(text) {
+  const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const inline = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/(^|[^*])\*(?!\s)(.+?)\*/g, '$1<em>$2</em>');
+  let html = '', list = null;
+  for (const line of String(text).split('\n')) {
+    const m = line.match(/^\s*(?:([-*•])|(\d+)[.)])\s+(.*)$/);
+    const type = m ? (m[1] ? 'ul' : 'ol') : null;
+    if (list && type !== list) { html += `</${list}>`; list = null; }
+    if (type) { if (!list) { html += `<${type}>`; list = type; } html += `<li>${inline(m[3])}</li>`; }
+    else html += line.trim() ? `${inline(line)}<br>` : '<br>';
+  }
+  return (list ? html + `</${list}>` : html).replace(/(<br>){3,}/g, '<br><br>');
+}
+
 function add(cls, text) {
-  const d = document.createElement('div'); d.className = `msg ${cls}`; d.textContent = text;
+  const d = document.createElement('div'); d.className = `msg ${cls}`;
+  if (cls === 'bot') d.innerHTML = md(text); else d.textContent = text;   // md() escapes before adding tags
   $('messages').appendChild(d); $('messages').scrollTop = 1e9; return d;
 }
 
