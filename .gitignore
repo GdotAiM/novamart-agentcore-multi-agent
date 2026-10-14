@@ -59,4 +59,3 @@ deploy-logs/
 *.pem
 *.key
 credentials
-!.env
