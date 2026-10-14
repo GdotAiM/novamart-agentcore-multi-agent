@@ -125,6 +125,7 @@ def main():
             after, count_after = order_snapshot(keys)
             row['runtime_failures'] = check_runtime(cid, expect, reply, before, after, count_before, count_after)
             row['orders_checked'] = len(after)
+            row['order_item_count'] = {'before': count_before, 'after': count_after}
             row['runtime_pass'] = not row['runtime_failures']
             row['pass'] = row['pass'] and row['runtime_pass']
             print(f"Runtime ({row['runtime_seconds']}s): {reply}")

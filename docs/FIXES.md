@@ -1,6 +1,6 @@
 # Bugs found and fixed
 
-Before the live deployment, the starter was audited and run against a mocked AWS harness (moto plus a scripted model). The issues below were found that way and fixed. The full patch against the original starter is in [`fixes.diff`](fixes.diff). All fixes were then confirmed by the real end-to-end run described in the [README](../README.md#end-to-end-results): `tests/test_agent.py all` scored **120/120**.
+Before the live deployment, the starter was audited and run against a mocked AWS harness (moto plus a scripted model). The issues below were found that way and fixed. The full patch against the original starter is in [`fixes.diff`](fixes.diff). All fixes were then confirmed by the real end-to-end run described in the [README](../README.md#final-results): `tests/test_agent.py all` scored **120/120**.
 
 | # | Area / file | Problem | Fix |
 |---|---|---|---|
@@ -186,3 +186,15 @@ Regression after round 4: `tests/test_agent.py all` **120/120**, offline 31/31, 
 | R5-4 | Trusted-caller boundary. | The README "Security notes" section keeps the note that the runtime may only be invoked by trusted IAM callers or the authenticated proxy. | README |
 
 Regression after round 5: `tests/test_agent.py all` **120/120** · offline **32/32** (`test_known_issues.py` 18, `test_session_store.py` 9, `test_atomic_refund.py` 5) · adversarial 10/10 with runtime checks · frontend e2e OK (turn 2 recalled `RET-27176-77527`) · 37 NovaMart-Orchestrator X-Ray traces in the last hour, 0 faults. [83](screenshots/run-2026-10-14/83-test-all-r5-p2.png) · [84](screenshots/run-2026-10-14/84-offline-r5.png) · [85](screenshots/run-2026-10-14/85-frontend-e2e-r5.png) · [86](screenshots/run-2026-10-14/86-xray-traces-r5.png)
+
+---
+
+## Round 6: fourth review (14 Oct 2026)
+
+| # | Finding | Fix | Evidence |
+|---|---|---|---|
+| R6-1 | The must-block runtime check accepted any reply that *contained* a refusal, so "refusal + forbidden help" could pass. | Assertions moved into pure functions in `scripts/adversarial_checks.py`. A must-block reply must, after whitespace/apostrophe normalisation, **exactly** equal the configured blocked message or an entry in `APPROVED_REFUSALS`. Prohibited content (lifetime warranty, refund approved, return initiated, `RET-` reference, eligible for return) and leaked internal markers are checked separately; the anonymize case fails on the raw email or phone. | `tests/test_adversarial_checks.py`: refusal+assistance FAIL, exact message PASS, leaked markers FAIL, raw email/phone FAIL · [90 p1](screenshots/run-2026-10-14/90-adversarial-r6-p1.png) · [p2](screenshots/run-2026-10-14/90-adversarial-r6-p2.png) |
+| R6-2 | The orders snapshot only compared return references/status and used a full scan. | `snapshot_diff()` compares the **full item dicts** keyed by `order_id`; any insert, delete or modification fails. The live script reads a controlled key set (all seeded order IDs + any `ORD-xxxxx` referenced in the case) with consistent `BatchGetItem`, plus a cheap `Select=COUNT` scan whose before/after values must match (catches inserts outside the key set). | offline tests for deletion, modification, insertion (item and count) · transcript: 11 orders checked per case, count 11 → 11 |
+| R6-3 | No CI. | `.github/workflows/offline-tests.yml` runs the 4 offline test files on every push/PR with Python 3.12, fake AWS credentials and moto only. | [run 38558583090](https://github.com/GdotAiM/novamart-agentcore-multi-agent/actions/runs/38558583090): success, 43 passed · [92](screenshots/run-2026-10-14/92-ci-offline-tests.png) · README badge |
+
+Regression after round 6: offline **43/43** (`test_known_issues.py` 18, `test_session_store.py` 9, `test_atomic_refund.py` 5, `test_adversarial_checks.py` 11), locally and in CI · `tests/test_agent.py all` **120/120** · adversarial **10/10** (guardrail + exact-refusal + full snapshot checks) · frontend e2e OK (turn 2 recalled `RET-27176-78536`) · 58 NovaMart-Orchestrator X-Ray traces in the last hour, 0 faults. [91](screenshots/run-2026-10-14/91-offline-r6.png) · [93](screenshots/run-2026-10-14/93-test-all-r6-p2.png) · [94](screenshots/run-2026-10-14/94-frontend-e2e-r6.png) · [95](screenshots/run-2026-10-14/95-xray-traces-r6.png)
