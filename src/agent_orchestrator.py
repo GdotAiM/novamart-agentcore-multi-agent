@@ -479,6 +479,51 @@ def _save_session_turn(session_id: str, user_text: str, assistant_text: str) -> 
         return False
 
 
+# ═══════════════════════════════════════════════════════
+#  STAND-OUT EXTRA - custom CloudWatch metrics per agent
+#  NovaMart/Agents: AgentInvocations, AgentLatency (ms), GuardrailIntervened,
+#  dimension Agent. Emitted asynchronously; never breaks a request.
+#  Disable with AGENT_METRICS_ENABLED=false.
+# ═══════════════════════════════════════════════════════
+
+METRICS_NAMESPACE = 'NovaMart/Agents'
+_metrics_pool = ThreadPoolExecutor(max_workers=2)
+
+
+def _emit_agent_metrics(agent_name: str, latency_ms: float, intervened: bool, error: bool = False) -> None:
+    if os.environ.get('AGENT_METRICS_ENABLED', 'true').strip().lower() in ('0', 'false', 'no'):
+        return
+    dims = [{'Name': 'Agent', 'Value': agent_name}]
+    data = [{'MetricName': 'AgentInvocations', 'Dimensions': dims, 'Value': 1, 'Unit': 'Count'},
+            {'MetricName': 'AgentLatency', 'Dimensions': dims, 'Value': latency_ms, 'Unit': 'Milliseconds'},
+            {'MetricName': 'GuardrailIntervened', 'Dimensions': dims, 'Value': 1 if intervened else 0, 'Unit': 'Count'},
+            {'MetricName': 'AgentErrors', 'Dimensions': dims, 'Value': 1 if error else 0, 'Unit': 'Count'}]
+
+    def _put():
+        try:
+            boto3.client('cloudwatch', region_name=config.AWS_REGION).put_metric_data(
+                Namespace=METRICS_NAMESPACE, MetricData=data)
+        except Exception as e:
+            logger.debug(f"put_metric_data failed: {e}")
+    try:
+        _metrics_pool.submit(_put)
+    except Exception:
+        pass
+
+
+def _timed_agent_call(agent_name: str, agent, prompt):
+    """Invoke a worker agent and record latency / guardrail interventions as metrics."""
+    t0 = time.time()
+    try:
+        result = agent(prompt)
+    except Exception:
+        _emit_agent_metrics(agent_name, (time.time() - t0) * 1000, False, error=True)
+        raise
+    intervened = str(getattr(result, 'stop_reason', '')) == 'guardrail_intervened'
+    _emit_agent_metrics(agent_name, (time.time() - t0) * 1000, intervened)
+    return result
+
+
 def _begin_turn(session_id: str, customer_id: str, request: str, memory_context: str = '') -> dict:
     """
     Start a new turn in WorkflowState: create the row for a new session, or for
@@ -1291,7 +1336,7 @@ def build_orchestrator_agent(
         prompt = (f"[Session ID: {session_id}] [Customer ID: {customer_id}] "
                   f"{_with_context(session_id, request)}")
         inventory_agent.messages.clear()
-        result = inventory_agent(prompt)
+        result = _timed_agent_call('InventoryAgent', inventory_agent, prompt)
         text = str(result)
 
         _update_workflow_state(session_id, {"inventory_agent": text}, old_version)
@@ -1316,7 +1361,7 @@ def build_orchestrator_agent(
         old_version = int(state.get("version", 0))
 
         policy_agent.messages.clear()
-        result = policy_agent(request)
+        result = _timed_agent_call('PolicyAgent', policy_agent, request)
         text = str(result)
 
         _update_workflow_state(session_id, {"policy_agent": text}, old_version)
@@ -1347,7 +1392,7 @@ def build_orchestrator_agent(
         rstate = getattr(refund_agent, 'refund_state', None)
         if rstate is not None:
             rstate.clear()
-        result = refund_agent(prompt)
+        result = _timed_agent_call('RefundAgent', refund_agent, prompt)
         text = str(result)
 
         # Deterministic backstop: an explicit, eligible return request must create the
@@ -1397,7 +1442,7 @@ def build_orchestrator_agent(
             "Output only the message to the customer."
         )
         communication_agent.messages.clear()
-        result = communication_agent(prompt)
+        result = _timed_agent_call('CommunicationAgent', communication_agent, prompt)
         text = _final_customer_text(str(result))
 
         _update_workflow_state(session_id, {"communication_agent": text}, old_version)

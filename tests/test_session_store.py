@@ -107,3 +107,17 @@ def test_prepare_turn_includes_session_history_without_memory(monkeypatch):
     prompt = ao._prepare_turn('ctx-1', 'CUST-004', 'what did I buy?')
     assert 'session store' in prompt and 'I bought a yoga mat' in prompt
     assert prompt.startswith('[Session ID: ctx-1] [Customer ID: CUST-004] what did I buy?')
+
+
+def test_timed_agent_call_emits_custom_metrics(monkeypatch):
+    sent = []
+    monkeypatch.setattr(ao, '_emit_agent_metrics', lambda *a, **k: sent.append((a, k)))
+
+    class R:
+        stop_reason = 'guardrail_intervened'
+    assert isinstance(ao._timed_agent_call('PolicyAgent', lambda p: R(), 'x'), R)
+    (name, ms, intervened), _ = sent[0]
+    assert name == 'PolicyAgent' and ms >= 0 and intervened is True
+    with pytest.raises(ValueError):
+        ao._timed_agent_call('RefundAgent', lambda p: (_ for _ in ()).throw(ValueError()), 'x')
+    assert sent[1][1] == {'error': True}
