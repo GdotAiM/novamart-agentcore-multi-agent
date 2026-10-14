@@ -1,0 +1,30 @@
+name: offline-tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    env:
+      # No AWS credentials: every AWS call in these tests is served by moto.
+      AWS_ACCESS_KEY_ID: testing
+      AWS_SECRET_ACCESS_KEY: testing
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt pytest moto
+      - name: Offline test suite (moto)
+        run: >
+          pytest -q tests/test_known_issues.py tests/test_session_store.py
+          tests/test_atomic_refund.py tests/test_adversarial_checks.py
